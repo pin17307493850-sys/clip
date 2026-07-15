@@ -50,7 +50,7 @@ class VideoProcessor:
         # 移除或替换不合法的字符
         # Windows和Unix系统都不允许的字符: < > : " | ? * \ /
         # 替换为下划线
-        sanitized = re.sub(r'[<>:"|?*\\/]', '_', filename)
+        sanitized = re.sub(r'[<>:"|?*\\/\']', '_', filename)
         
         # 移除前后空格和点
         sanitized = sanitized.strip(' .')
@@ -286,8 +286,9 @@ class VideoProcessor:
             output_path.parent.mkdir(parents=True, exist_ok=True)
             
             # 构建FFmpeg命令
+            ffmpeg_bin = get_ffmpeg_path()
             cmd = [
-                'ffmpeg',
+                ffmpeg_bin,
                 '-i', str(video_path),
                 '-ss', str(time_offset),
                 '-vframes', '1',

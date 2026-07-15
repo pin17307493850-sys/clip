@@ -19,6 +19,32 @@ logger = logging.getLogger(__name__)
 ProgressCallback = Optional[Callable[[str, str, int], None]]
 
 
+def _compact_text(value: Any) -> str:
+    if isinstance(value, list):
+        value = " ".join(str(item) for item in value if item)
+    elif isinstance(value, dict):
+        value = " ".join(str(item) for item in value.values() if item)
+    return " ".join(str(value or "").replace("\n", " ").split())
+
+
+def _product_name_from_clip(clip: Dict[str, Any]) -> str:
+    for key in ("product", "product_name"):
+        product = _compact_text(clip.get(key)).strip(" -_")
+        if product:
+            if "狼木果茶" in product and "朗姆" not in product:
+                return "狼木果茶（朗姆果茶）"
+            return product[:24]
+    text = _compact_text(
+        " ".join(
+            _compact_text(clip.get(key))
+            for key in ("generated_title", "outline", "content", "title_angle", "recommend_reason")
+        )
+    )
+    if "狼木果茶" in text or "朗姆果茶" in text:
+        return "狼木果茶（朗姆果茶）"
+    return ""
+
+
 class TitleGenerator:
     """Generate or fallback titles for scored clips."""
 
@@ -109,6 +135,9 @@ class TitleGenerator:
                     if isinstance(generated_title, str) and generated_title.strip()
                     else self._fallback_title(clip)
                 )
+                clip["generated_title"] = self._product_first_title(clip, clip["generated_title"])
+                if not clip.get("title") or str(clip.get("title")).startswith("片段_"):
+                    clip["title"] = clip["generated_title"]
             return clips
         except Exception as exc:
             logger.warning(
@@ -118,11 +147,20 @@ class TitleGenerator:
                 exc,
             )
             for clip in clips:
-                clip["generated_title"] = self._fallback_title(clip)
+                clip["generated_title"] = self._product_first_title(clip, self._fallback_title(clip))
+                if not clip.get("title") or str(clip.get("title")).startswith("片段_"):
+                    clip["title"] = clip["generated_title"]
                 clip["title_source"] = "fallback"
             return clips
 
     def _fallback_title(self, clip: Dict) -> str:
+        product = _product_name_from_clip(clip)
+        point = _compact_text(clip.get("selling_point") or clip.get("title_angle") or clip.get("product_value"))
+        if product and point:
+            return f"{product}：{point}"[:42]
+        if product:
+            return f"{product} 产品介绍"[:42]
+
         outline = clip.get("outline")
         if isinstance(outline, dict):
             title = outline.get("title") or outline.get("summary") or ""
@@ -134,6 +172,17 @@ class TitleGenerator:
         if not title:
             title = f"产品切片 {clip.get('id', '')}".strip()
         return title[:42]
+
+    def _product_first_title(self, clip: Dict, title: str) -> str:
+        product = _product_name_from_clip(clip)
+        clean_title = _compact_text(title)
+        if not product:
+            return clean_title[:42]
+        if product in clean_title:
+            return clean_title[:42]
+        if "狼木果茶" in clean_title and product.startswith("狼木果茶"):
+            return clean_title.replace("狼木果茶", product, 1)[:42]
+        return f"{product}：{clean_title}"[:42]
 
     def _save_partial(self, clips_with_titles: List[Dict]) -> None:
         self.partial_path.parent.mkdir(parents=True, exist_ok=True)
@@ -148,6 +197,20 @@ class TitleGenerator:
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(clips_with_titles, f, ensure_ascii=False, indent=2)
         logger.info("Saved titled clips to: %s", output_path)
+
+
+def normalize_clip_titles(clips_with_titles: List[Dict]) -> List[Dict]:
+    """Apply product-first titles to cached title checkpoints."""
+    normalizer = TitleGenerator.__new__(TitleGenerator)
+    changed = []
+    for clip in clips_with_titles:
+        title = clip.get("generated_title") or clip.get("title") or ""
+        normalized = normalizer._product_first_title(clip, title) if title else normalizer._fallback_title(clip)
+        clip["generated_title"] = normalized
+        if not clip.get("title") or str(clip.get("title")).startswith("片段_"):
+            clip["title"] = normalized
+        changed.append(clip)
+    return changed
 
 
 def run_step4_title(
@@ -168,7 +231,7 @@ def run_step4_title(
         prompt_files=prompt_files,
         progress_callback=progress_callback,
     )
-    clips_with_titles = title_generator.generate_titles(high_score_clips)
+    clips_with_titles = normalize_clip_titles(title_generator.generate_titles(high_score_clips))
 
     if output_path is None:
         output_path = Path(metadata_dir) / "step4_titles.json"

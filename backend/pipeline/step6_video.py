@@ -36,6 +36,10 @@ def _ffmpeg_subtitle_path(path: Path) -> str:
     return value
 
 
+def _ffmpeg_force_style(style: str) -> str:
+    return style.replace(",", r"\,")
+
+
 def _write_shifted_srt(source_srt: Path, output_srt: Path, start: float, end: float, fallback_text: str = "") -> bool:
     subtitles = TextProcessor.parse_srt(source_srt)
     duration = max(0.1, end - start)
@@ -88,12 +92,12 @@ def _burn_subtitles_into_clip(clip_path: Path, source_srt: Path, clip: Dict[str,
         return False
 
     temp_output = clip_path.with_name(f"{clip_path.stem}_with_subtitles.tmp.mp4")
-    subtitle_filter = (
-        f"subtitles='{_ffmpeg_subtitle_path(subtitle_path)}':"
-        "force_style='FontName=Microsoft YaHei,FontSize=18,"
+    style = _ffmpeg_force_style(
+        "FontName=Microsoft YaHei,FontSize=18,"
         "PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,"
-        "BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=42'"
+        "BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=42"
     )
+    subtitle_filter = f"subtitles=filename='{_ffmpeg_subtitle_path(subtitle_path)}':force_style='{style}'"
     cmd = [
         get_ffmpeg_path(),
         "-y",

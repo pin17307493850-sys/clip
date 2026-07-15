@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Optional
 from pathlib import Path
 from sqlalchemy.orm import Session
 from backend.models.clip import Clip, ClipStatus
-from backend.models.collection import Collection, CollectionStatus
+from backend.models.collection import Collection, CollectionStatus, clip_collection
 from backend.models.project import Project, ProjectStatus, ProjectType
 from backend.models.task import Task, TaskStatus, TaskType
 from datetime import datetime
@@ -103,6 +103,7 @@ class DataSyncService:
 
             
             # 同步切片数据
+            self._clear_generated_records(project_id)
             clips_count = self._sync_clips_from_filesystem(project_id, project_dir)
             
             # 同步合集数据
@@ -125,6 +126,34 @@ class DataSyncService:
             self.db.rollback()
             return {"success": False, "error": str(e)}
     
+    def _clear_generated_records(self, project_id: str) -> None:
+        """Replace generated clip and collection rows with the current filesystem state."""
+        collection_ids = [
+            row[0]
+            for row in self.db.query(Collection.id).filter(Collection.project_id == project_id).all()
+        ]
+        clip_ids = [
+            row[0]
+            for row in self.db.query(Clip.id).filter(Clip.project_id == project_id).all()
+        ]
+        if collection_ids:
+            self.db.execute(
+                clip_collection.delete().where(clip_collection.c.collection_id.in_(collection_ids))
+            )
+        if clip_ids:
+            self.db.execute(
+                clip_collection.delete().where(clip_collection.c.clip_id.in_(clip_ids))
+            )
+        deleted_collections = self.db.query(Collection).filter(Collection.project_id == project_id).delete(synchronize_session=False)
+        deleted_clips = self.db.query(Clip).filter(Clip.project_id == project_id).delete(synchronize_session=False)
+        self.db.commit()
+        logger.info(
+            "Reset generated records before filesystem sync: project=%s clips=%s collections=%s",
+            project_id,
+            deleted_clips,
+            deleted_collections,
+        )
+
     def _read_project_metadata(self, project_dir: Path) -> Optional[Dict[str, Any]]:
         """读取项目元数据"""
         metadata_files = [
@@ -243,9 +272,19 @@ class DataSyncService:
                     
                     # 查找实际的文件名（保留特殊字符）
                     actual_filename = None
-                    for file_path in project_clips_dir.glob(f"{clip_id}_*.mp4"):
-                        actual_filename = file_path.name
-                        break
+                    from ..utils.video_processor import VideoProcessor
+                    expected_filename = f"{clip_id}_{VideoProcessor.sanitize_filename(str(title))}.mp4"
+                    expected_path = project_clips_dir / expected_filename
+                    if expected_path.exists():
+                        actual_filename = expected_path.name
+                    else:
+                        matches = sorted(
+                            project_clips_dir.glob(f"{clip_id}_*.mp4"),
+                            key=lambda item: item.stat().st_mtime,
+                            reverse=True,
+                        )
+                        if matches:
+                            actual_filename = matches[0].name
                     
                     if actual_filename:
                         project_video_path = project_clips_dir / actual_filename
@@ -449,10 +488,12 @@ class DataSyncService:
                             video_path=video_path,
                             export_path=video_path,  # 设置export_path
                             thumbnail_path=str(thumbnail_path) if thumbnail_path.exists() else None,
+                            clips_count=len(uuid_clip_ids),
                             collection_metadata={
                                 'clip_ids': uuid_clip_ids,  # 使用UUID格式的clip_ids
                                 'original_clip_ids': original_clip_ids,  # 保留原始数字ID
-                                'collection_type': 'ai_recommended',
+                                'collection_type': collection_data.get('collection_type', 'ai_recommended'),
+                                'product': collection_data.get('product'),
                                 'original_id': collection_id
                             },
                             status=CollectionStatus.COMPLETED
@@ -468,10 +509,12 @@ class DataSyncService:
                         collection.collection_metadata.update({
                             'clip_ids': uuid_clip_ids,
                             'original_clip_ids': original_clip_ids,
-                            'collection_type': 'ai_recommended',
+                            'collection_type': collection_data.get('collection_type', 'ai_recommended'),
+                            'product': collection_data.get('product'),
                             'original_id': collection_id
                         })
                         collection.video_path = video_path
+                        collection.clips_count = len(uuid_clip_ids)
                         collection.export_path = video_path  # 设置export_path
                         logger.info(f"更新现有合集: {collection.id}")
                     
@@ -736,8 +779,8 @@ class DataSyncService:
                         
                         # 更新项目状态和统计信息
                         project.status = ProjectStatus.COMPLETED
-                        project.total_clips = step6_output.get("clips_count", 0)
-                        project.total_collections = step6_output.get("collections_count", 0)
+                        project.total_clips = step6_output.get("clips_generated", step6_output.get("clips_count", 0))
+                        project.total_collections = step6_output.get("collections_generated", step6_output.get("collections_count", 0))
                         project.completed_at = datetime.now()
                         
                         self.db.commit()

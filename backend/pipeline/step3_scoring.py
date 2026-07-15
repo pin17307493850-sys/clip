@@ -22,6 +22,37 @@ logger = logging.getLogger(__name__)
 ProgressCallback = Optional[Callable[[str, str, int], None]]
 
 
+def _looks_like_product_clip(clip: Dict[str, Any]) -> bool:
+    text_parts = []
+    for key in (
+        "product",
+        "product_name",
+        "outline",
+        "content",
+        "title",
+        "generated_title",
+        "title_angle",
+        "selling_point",
+        "product_value",
+        "recommend_reason",
+    ):
+        value = clip.get(key)
+        if isinstance(value, list):
+            text_parts.extend(str(item) for item in value if item)
+        elif isinstance(value, dict):
+            text_parts.extend(str(item) for item in value.values() if item)
+        elif value:
+            text_parts.append(str(value))
+    text = " ".join(text_parts)
+    product_words = (
+        "产品", "礼盒", "套装", "套餐", "价格", "优惠", "口味", "果茶", "果酒",
+        "朗姆", "狼木", "茶", "酒", "适合", "人群", "卖点", "包装", "使用场景",
+        "冷泡", "热泡", "酸甜", "清爽", "月销", "门店", "链接", "拍下",
+        "下单", "库存", "入口", "风味", "香气", "搭配", "复购",
+    )
+    return any(word in text for word in product_words)
+
+
 class ClipScorer:
     """Score timeline candidates with resumable small batches."""
 
@@ -151,7 +182,10 @@ class ClipScorer:
             score += 0.05
         if duration >= 35:
             score += 0.04
-        if any(word in text for word in ("产品", "价格", "优惠", "买", "口味", "功效", "适合", "赠", "直播间")):
+        if any(word in text for word in (
+            "产品", "价格", "优惠", "买", "口味", "功效", "适合", "赠", "直播间",
+            "冷泡", "热泡", "酸甜", "清爽", "果茶", "月销", "门店", "入口", "风味",
+        )):
             score += 0.08
         if any(word in text for word in ("茉莉", "桂花", "樱花", "乌龙", "茶", "罐", "杯垫", "勺")):
             score += 0.07
@@ -215,7 +249,15 @@ def run_step3_scoring(
 
     scorer = ClipScorer(metadata_dir=metadata_dir, prompt_files=prompt_files, progress_callback=progress_callback)
     scored_clips = scorer.score_clips(timeline_data)
-    high_score_clips = [clip for clip in scored_clips if clip.get("final_score", 0) >= MIN_SCORE_THRESHOLD]
+    high_score_clips = []
+    for clip in scored_clips:
+        score = float(clip.get("final_score", 0) or 0)
+        if score >= MIN_SCORE_THRESHOLD:
+            high_score_clips.append(clip)
+        elif _looks_like_product_clip(clip) and score >= 0.55:
+            clip["keep_reason"] = "product_coverage_guard"
+            clip["final_score"] = max(score, 0.65)
+            high_score_clips.append(clip)
 
     all_scored_path = metadata_dir / "step3_all_scored.json"
     scorer.save_scores(scored_clips, all_scored_path)

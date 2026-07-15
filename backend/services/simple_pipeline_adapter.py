@@ -12,7 +12,7 @@ from backend.services.simple_progress import emit_progress, clear_progress
 from backend.pipeline.step1_outline import run_step1_outline
 from backend.pipeline.step2_timeline import run_step2_timeline
 from backend.pipeline.step3_scoring import run_step3_scoring
-from backend.pipeline.step4_title import run_step4_title
+from backend.pipeline.step4_title import normalize_clip_titles, run_step4_title
 from backend.pipeline.step5_clustering import run_step5_clustering
 from backend.pipeline.step6_video import run_step6_video
 
@@ -295,6 +295,9 @@ class SimplePipelineAdapter:
                 titles_path = metadata_dir / "step4_titles.json"
                 titled_clips = self._load_checkpoint(titles_path, "标题")
                 if titled_clips is not None:
+                    titled_clips = normalize_clip_titles(titled_clips)
+                    with open(titles_path, "w", encoding="utf-8") as f:
+                        json.dump(titled_clips, f, ensure_ascii=False, indent=2)
                     emit_progress(self.project_id, "HIGHLIGHT", "已复用标题断点", subpercent=40)
                 else:
                     titled_clips = run_step4_title(
@@ -337,7 +340,9 @@ class SimplePipelineAdapter:
                 logger.info("执行Step 5: 主题聚类")
                 emit_progress(self.project_id, "HIGHLIGHT", "正在整理合集", subpercent=70)
                 collections_path = metadata_dir / "step5_collections.json"
-                collections = self._load_checkpoint(collections_path, "合集")
+                collections = None
+                if video_category not in ("product_intro_short", "live_product"):
+                    collections = self._load_checkpoint(collections_path, "合集")
                 if collections is not None:
                     emit_progress(self.project_id, "HIGHLIGHT", "已复用合集断点", subpercent=95)
                 else:

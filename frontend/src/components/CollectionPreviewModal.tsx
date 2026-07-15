@@ -39,6 +39,7 @@ const CollectionPreviewModal: React.FC<CollectionPreviewModalProps> = ({
 }) => {
   const [currentClipIndex, setCurrentClipIndex] = useState(0)
   const [playing, setPlaying] = useState(false)
+  const [playCollectionVideo, setPlayCollectionVideo] = useState(true)
   const autoPlay = true
 
   const [showAddClipModal, setShowAddClipModal] = useState(false)
@@ -66,15 +67,18 @@ const CollectionPreviewModal: React.FC<CollectionPreviewModalProps> = ({
     if (visible && collectionClips.length > 0) {
       setCurrentClipIndex(0)
       setPlaying(false)
+      setPlayCollectionVideo(true)
     }
   }, [visible, latestCollection, collectionClips.length, lastEditTimestamp])
 
   const handleClipSelect = (index: number) => {
+    setPlayCollectionVideo(false)
     setCurrentClipIndex(index)
     setPlaying(true)
   }
 
   const handlePlayNext = () => {
+    setPlayCollectionVideo(false)
     if (currentClipIndex < collectionClips.length - 1) {
       setCurrentClipIndex(currentClipIndex + 1)
       if (autoPlay) {
@@ -86,6 +90,7 @@ const CollectionPreviewModal: React.FC<CollectionPreviewModalProps> = ({
   }
 
   const handlePlayPrevious = () => {
+    setPlayCollectionVideo(false)
     if (currentClipIndex > 0) {
       setCurrentClipIndex(currentClipIndex - 1)
       if (autoPlay) {
@@ -306,8 +311,34 @@ const CollectionPreviewModal: React.FC<CollectionPreviewModalProps> = ({
             <Col span={16} className="video-section">
               <div className="video-player-wrapper">
                 <div className="video-container">
-                  {currentClip ? (
+                  {latestCollection && playCollectionVideo ? (
                     <ReactPlayer
+                      key={`collection-${latestCollection.id}`}
+                      ref={playerRef}
+                      url={projectApi.getCollectionVideoUrl(projectId, latestCollection.id)}
+                      width="100%"
+                      height="100%"
+                      playing={playing}
+                      controls
+                      onEnded={() => setPlaying(false)}
+                      onPlay={() => setPlaying(true)}
+                      onPause={() => setPlaying(false)}
+                      onError={() => {
+                        setPlayCollectionVideo(false)
+                        setPlaying(false)
+                      }}
+                      config={{
+                        file: {
+                          attributes: {
+                            controlsList: 'nodownload',
+                            preload: 'metadata'
+                          }
+                        }
+                      }}
+                    />
+                  ) : currentClip ? (
+                    <ReactPlayer
+                      key={`clip-${currentClip.id}`}
                       ref={playerRef}
                       url={projectApi.getClipVideoUrl(projectId, currentClip.id, currentClip.title || currentClip.generated_title)}
                       width="100%"
@@ -327,46 +358,64 @@ const CollectionPreviewModal: React.FC<CollectionPreviewModalProps> = ({
                 </div>
                 
                 {/* 视频信息栏 - 移到视频下方 */}
-                {currentClip && (
+                {(currentClip || latestCollection) && (
                   <div className="video-info-bar">
                     <div className="video-info-content">
                       <div className="video-title-section">
                         <div className="video-title">
-                          <EditableTitle
-                            title={currentClip.title || currentClip.generated_title || '未命名片段'}
-                            clipId={currentClip.id}
-                            onTitleUpdate={(newTitle) => {
-                              // 这里可以触发父组件的更新回调
-                              console.log('标题已更新:', newTitle)
-                            }}
-                            style={{ color: 'var(--ac-ink)', fontSize: '16px', fontWeight: '500' }}
-                          />
+                          {playCollectionVideo && latestCollection ? (
+                            <span>{latestCollection.collection_title}</span>
+                          ) : currentClip ? (
+                            <EditableTitle
+                              title={currentClip.title || currentClip.generated_title || '未命名片段'}
+                              clipId={currentClip.id}
+                              onTitleUpdate={(newTitle) => {
+                                // 这里可以触发父组件的更新回调
+                                console.log('标题已更新:', newTitle)
+                              }}
+                              style={{ color: 'var(--ac-ink)', fontSize: '16px', fontWeight: '500' }}
+                            />
+                          ) : null}
                         </div>
                         <div className="video-meta">
-                          <Tag style={{ background: 'var(--ac-line-2)', color: 'var(--ac-sub)', border: '1px solid var(--ac-line)', borderRadius: '6px' }}>
-                            <span className="ac-mono">{formatDuration(currentClip)}</span>
-                          </Tag>
-                          <Tag
-                            style={{
-                              background: 'var(--ac-line-2)',
-                              color: 'var(--ac-ink)',
-                              border: '1px solid var(--ac-line)',
-                              borderRadius: '6px'
-                            }}
-                          >
-                            <span className="ac-mono">{(currentClip.final_score * 100).toFixed(0)}</span> 分
-                          </Tag>
+                          {!playCollectionVideo && currentClip && (
+                            <>
+                              <Tag style={{ background: 'var(--ac-line-2)', color: 'var(--ac-sub)', border: '1px solid var(--ac-line)', borderRadius: '6px' }}>
+                                <span className="ac-mono">{formatDuration(currentClip)}</span>
+                              </Tag>
+                              <Tag
+                                style={{
+                                  background: 'var(--ac-line-2)',
+                                  color: 'var(--ac-ink)',
+                                  border: '1px solid var(--ac-line)',
+                                  borderRadius: '6px'
+                                }}
+                              >
+                                <span className="ac-mono">{(currentClip.final_score * 100).toFixed(0)}</span> 分
+                              </Tag>
+                            </>
+                          )}
                           <Text style={{ color: 'var(--ac-muted)', marginLeft: 8 }}>
-                            {currentClipIndex + 1} / {collectionClips.length}
+                            {playCollectionVideo ? `合集视频 · ${collectionClips.length} 个切片` : `${currentClipIndex + 1} / ${collectionClips.length}`}
                           </Text>
                         </div>
                       </div>
                       
                       <div className="video-controls">
+                        <Button
+                          type="text"
+                          icon={<PlayCircleOutlined />}
+                          onClick={() => {
+                            setPlayCollectionVideo(true)
+                            setPlaying(true)
+                          }}
+                          title="播放合集完整视频"
+                          className="control-btn"
+                        />
                         <Button 
                           type="text" 
                           icon={<LeftOutlined />}
-                          disabled={currentClipIndex === 0}
+                          disabled={playCollectionVideo || currentClipIndex === 0}
                           onClick={handlePlayPrevious}
                           title="上一个切片"
                           className="control-btn"
@@ -374,7 +423,7 @@ const CollectionPreviewModal: React.FC<CollectionPreviewModalProps> = ({
                         <Button 
                           type="text" 
                           icon={<RightOutlined />}
-                          disabled={currentClipIndex === collectionClips.length - 1}
+                          disabled={playCollectionVideo || currentClipIndex === collectionClips.length - 1}
                           onClick={handlePlayNext}
                           title="下一个切片"
                           className="control-btn"

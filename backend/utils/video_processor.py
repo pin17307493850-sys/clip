@@ -369,6 +369,7 @@ class VideoProcessor:
             title = clip_data.get('title', f"片段_{clip_id}")
             start_time = clip_data['start_time']
             end_time = clip_data['end_time']
+            force = bool(clip_data.get('force'))
             
             # 处理时间格式 - 如果是秒数，转换为SRT格式
             if isinstance(start_time, (int, float)):
@@ -380,7 +381,10 @@ class VideoProcessor:
             # 在文件名中包含clip_id，便于后续合集拼接时查找
             safe_title = VideoProcessor.sanitize_filename(title)
             output_path = self.clips_dir / f"{clip_id}_{safe_title}.mp4"
-            if output_path.exists() and output_path.stat().st_size > 0:
+            if force:
+                for stale_path in self.clips_dir.glob(f"{clip_id}_*.mp4"):
+                    stale_path.unlink(missing_ok=True)
+            if output_path.exists() and output_path.stat().st_size > 0 and not force:
                 logger.info(f"Clip {clip_id} already exists, skipping extraction: {output_path}")
                 successful_clips.append(output_path)
                 continue

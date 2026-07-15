@@ -18,6 +18,7 @@ from ..core.shared_config import METADATA_DIR, CLIPS_DIR, COLLECTIONS_DIR
 logger = logging.getLogger(__name__)
 
 ProgressCallback = Optional[Callable[[str, str, int], None]]
+CLIP_PADDING_SECONDS = 2.0
 
 
 def _seconds_to_srt_time(seconds: float) -> str:
@@ -38,6 +39,12 @@ def _ffmpeg_subtitle_path(path: Path) -> str:
 
 def _ffmpeg_force_style(style: str) -> str:
     return style.replace(",", r"\,")
+
+
+def _time_to_seconds(value: Any) -> float:
+    if isinstance(value, (int, float)):
+        return max(0.0, float(value))
+    return max(0.0, TextProcessor.time_to_seconds(str(value)))
 
 
 def _write_shifted_srt(source_srt: Path, output_srt: Path, start: float, end: float, fallback_text: str = "") -> bool:
@@ -74,8 +81,8 @@ def _write_shifted_srt(source_srt: Path, output_srt: Path, start: float, end: fl
 
 def _burn_subtitles_into_clip(clip_path: Path, source_srt: Path, clip: Dict[str, Any], work_dir: Path) -> bool:
     try:
-        start = TextProcessor.time_to_seconds(str(clip["start_time"]))
-        end = TextProcessor.time_to_seconds(str(clip["end_time"]))
+        start = _time_to_seconds(clip.get("export_start_time", clip["start_time"]))
+        end = _time_to_seconds(clip.get("export_end_time", clip["end_time"]))
     except Exception as exc:
         logger.warning("Subtitle burn skipped, clip time parse failed %s: %s", clip.get("id"), exc)
         return False
@@ -154,14 +161,33 @@ class VideoGenerator:
         """
         logger.info("开始生成切片视频...")
         
+        video_info = self.video_processor.get_video_info(input_video)
+        video_duration = float(video_info.get("duration") or 0)
+
         # 准备切片数据
         clips_data = []
         for clip in clips_with_titles:
+            start_seconds = _time_to_seconds(clip["start_time"])
+            end_seconds = _time_to_seconds(clip["end_time"])
+            export_start = max(0.0, start_seconds - CLIP_PADDING_SECONDS)
+            export_end = end_seconds + CLIP_PADDING_SECONDS
+            if video_duration > 0:
+                export_end = min(video_duration, export_end)
+            if export_end <= export_start:
+                export_start, export_end = start_seconds, end_seconds
+
+            clip["export_start_time"] = _seconds_to_srt_time(export_start)
+            clip["export_end_time"] = _seconds_to_srt_time(export_end)
+            clip["export_padding_seconds"] = CLIP_PADDING_SECONDS
+
             clips_data.append({
                 'id': clip['id'],
                 'title': clip.get('generated_title', f"片段_{clip['id']}"),
-                'start_time': clip['start_time'],
-                'end_time': clip['end_time']
+                'start_time': clip["export_start_time"],
+                'end_time': clip["export_end_time"],
+                'original_start_time': clip['start_time'],
+                'original_end_time': clip['end_time'],
+                'force': True,
             })
         
         # 批量生成切片

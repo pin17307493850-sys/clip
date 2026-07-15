@@ -55,10 +55,12 @@ class ThumbnailGenerator:
                 time_offset = self._get_optimal_thumbnail_time(video_path)
             
             # 检查是否使用视频封面
+            using_cover = False
             if time_offset == -1.0:
                 # 使用视频封面
                 cover_path = video_path.parent / f"{video_path.stem}_cover.jpg"
                 if cover_path.exists():
+                    using_cover = True
                     # 直接复制封面文件并调整大小
                     ffmpeg_bin = get_ffmpeg_path()
                     cmd = [
@@ -73,8 +75,9 @@ class ThumbnailGenerator:
                 else:
                     # 封面不存在，回退到默认时间点
                     time_offset = 1.0
+                    ffmpeg_bin = get_ffmpeg_path()
                     cmd = [
-                        'ffmpeg',
+                        ffmpeg_bin,
                         '-ss', str(time_offset),
                         '-i', str(video_path),
                         '-vframes', '1',
@@ -107,6 +110,15 @@ class ThumbnailGenerator:
                 return output_path
             else:
                 logger.error(f"缩略图生成失败: {result.stderr}")
+                if using_cover:
+                    logger.warning("视频内嵌封面不可用，回退到视频帧截图: %s", video_path)
+                    return self.generate_thumbnail(
+                        video_path,
+                        output_path,
+                        time_offset=2.0,
+                        width=width,
+                        height=height,
+                    )
                 return None
                 
         except subprocess.TimeoutExpired:
@@ -303,4 +315,3 @@ def generate_project_thumbnail(project_id: str, video_path: Path) -> Optional[st
     """
     generator = ThumbnailGenerator()
     return generator.generate_thumbnail_base64(video_path)
-

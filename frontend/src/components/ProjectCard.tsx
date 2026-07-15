@@ -114,6 +114,17 @@ const ProjectCard: React.FC<ProjectCardProps> = ({ project, onDelete, onRetry, o
       setThumbnailLoading(true)
       
       try {
+        try {
+          const result = await projectApi.generateThumbnail(project.id)
+          if (result?.thumbnail) {
+            setVideoThumbnail(result.thumbnail)
+            localStorage.setItem(thumbnailCacheKey, result.thumbnail)
+            return
+          }
+        } catch (backendError) {
+          console.warn('后端生成项目封面失败，尝试前端取帧:', backendError)
+        }
+
         const video = document.createElement('video')
         video.crossOrigin = 'anonymous'
         video.muted = true
@@ -121,6 +132,7 @@ const ProjectCard: React.FC<ProjectCardProps> = ({ project, onDelete, onRetry, o
         
         // 尝试多个可能的视频文件路径
         const possiblePaths = [
+          'raw/input.mp4',
           'input/input.mp4',
           'input.mp4',
           project.video_path,

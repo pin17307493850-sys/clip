@@ -7,6 +7,8 @@ import subprocess
 import json
 import os
 import asyncio
+import threading
+from contextlib import contextmanager
 from typing import Optional, List, Dict, Any, Union, Callable
 from pathlib import Path
 from enum import Enum
@@ -15,6 +17,50 @@ from dataclasses import dataclass
 from .ffmpeg_utils import get_ffmpeg_path
 
 logger = logging.getLogger(__name__)
+
+_WHISPER_TRANSCRIPTION_THREAD_LOCK = threading.Lock()
+
+
+@contextmanager
+def _whisper_transcription_lock(video_path: Path):
+    """Serialize local Whisper jobs across threads and desktop backend processes."""
+    from backend.core.path_utils import get_data_directory
+
+    lock_dir = get_data_directory() / "locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = lock_dir / "whisper_transcription.lock"
+
+    logger.info("等待本地 Whisper 字幕识别锁，避免批量任务并发占满 CPU/内存: %s", video_path)
+    with _WHISPER_TRANSCRIPTION_THREAD_LOCK:
+        lock_file = lock_path.open("a+b")
+        try:
+            lock_file.seek(0, os.SEEK_END)
+            if lock_file.tell() == 0:
+                lock_file.write(b"\0")
+                lock_file.flush()
+            lock_file.seek(0)
+
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+                try:
+                    logger.info("开始串行执行本地 Whisper 字幕识别: %s", video_path)
+                    yield
+                finally:
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    logger.info("开始串行执行本地 Whisper 字幕识别: %s", video_path)
+                    yield
+                finally:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_file.close()
 
 
 class SpeechRecognitionMethod(str, Enum):
@@ -381,49 +427,54 @@ class SpeechRecognizer:
             return output_path
 
         try:
-            whisper_runtime.ensure_on_path()  # 让 faster_whisper 可导入
-            from faster_whisper import WhisperModel  # 延迟导入：运行时安装目录里的包
+            with _whisper_transcription_lock(video_path):
+                if output_path.exists():
+                    logger.info(f"字幕文件已存在，等待期间已由其他任务生成，跳过Whisper处理: {output_path}")
+                    return output_path
 
-            language = None if config.language == LanguageCode.AUTO else str(config.language).split("-")[0]
-            models_dir = str(whisper_runtime.get_models_dir() / "hub")
-            logger.info(f"使用 faster-whisper 生成字幕: model={config.model} lang={language or 'auto'}")
-            try:
-                audio_source = self._extract_audio_from_video(video_path, output_path.parent)
-                logger.info(f"Whisper will transcribe extracted audio: {audio_source}")
-            except Exception as audio_error:
-                logger.warning(f"Audio extraction failed, falling back to original video: {audio_error}")
-                audio_source = video_path
+                whisper_runtime.ensure_on_path()  # 让 faster_whisper 可导入
+                from faster_whisper import WhisperModel  # 延迟导入：运行时安装目录里的包
 
-            # Use CPU explicitly on desktop builds. CTranslate2's auto device can
-            # pick CUDA on Windows and then fail when CUDA DLLs are not installed.
-            model = WhisperModel(
-                config.model, device="cpu", compute_type="int8", download_root=models_dir,
-            )
-            seg_iter, info = model.transcribe(
-                str(audio_source),
-                language=language,
-                vad_filter=True,
-                beam_size=1,
-            )
-            duration = float(getattr(info, "duration", 0) or 0)
-            segments = []
-            for index, segment in enumerate(seg_iter, start=1):
-                segments.append({"start": segment.start, "end": segment.end, "text": segment.text})
-                if progress_callback and duration > 0:
-                    progress_callback(float(segment.end), duration, index)
-                if index == 1 or index % 20 == 0:
-                    logger.info(
-                        "Whisper transcribed %s segments, latest end %.2fs",
-                        index,
-                        segment.end,
-                    )
-            if not segments:
-                raise SpeechRecognitionError("Whisper 未识别出任何语音内容")
+                language = None if config.language == LanguageCode.AUTO else str(config.language).split("-")[0]
+                models_dir = str(whisper_runtime.get_models_dir() / "hub")
+                logger.info(f"使用 faster-whisper 生成字幕: model={config.model} lang={language or 'auto'}")
+                try:
+                    audio_source = self._extract_audio_from_video(video_path, output_path.parent)
+                    logger.info(f"Whisper will transcribe extracted audio: {audio_source}")
+                except Exception as audio_error:
+                    logger.warning(f"Audio extraction failed, falling back to original video: {audio_error}")
+                    audio_source = video_path
 
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(self._segments_to_srt(segments), encoding="utf-8")
-            logger.info(f"本地 faster-whisper 字幕生成成功: {output_path}")
-            return output_path
+                # Use CPU explicitly on desktop builds. CTranslate2's auto device can
+                # pick CUDA on Windows and then fail when CUDA DLLs are not installed.
+                model = WhisperModel(
+                    config.model, device="cpu", compute_type="int8", download_root=models_dir,
+                )
+                seg_iter, info = model.transcribe(
+                    str(audio_source),
+                    language=language,
+                    vad_filter=True,
+                    beam_size=1,
+                )
+                duration = float(getattr(info, "duration", 0) or 0)
+                segments = []
+                for index, segment in enumerate(seg_iter, start=1):
+                    segments.append({"start": segment.start, "end": segment.end, "text": segment.text})
+                    if progress_callback and duration > 0:
+                        progress_callback(float(segment.end), duration, index)
+                    if index == 1 or index % 20 == 0:
+                        logger.info(
+                            "Whisper transcribed %s segments, latest end %.2fs",
+                            index,
+                            segment.end,
+                        )
+                if not segments:
+                    raise SpeechRecognitionError("Whisper 未识别出任何语音内容")
+
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_text(self._segments_to_srt(segments), encoding="utf-8")
+                logger.info(f"本地 faster-whisper 字幕生成成功: {output_path}")
+                return output_path
 
         except SpeechRecognitionError:
             raise

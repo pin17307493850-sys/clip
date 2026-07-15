@@ -1,11 +1,31 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Alert, Button, Card, Progress, Tag, Space, Typography, message, List, Popconfirm, Spin, Tooltip,
+  Alert,
+  Button,
+  Card,
+  List,
+  Popconfirm,
+  Progress,
+  Space,
+  Spin,
+  Tag,
+  Tooltip,
+  Typography,
+  message,
 } from 'antd'
 import {
-  DownloadOutlined, DeleteOutlined, CheckCircleFilled, ReloadOutlined, ThunderboltOutlined,
+  CheckCircleFilled,
+  DeleteOutlined,
+  DownloadOutlined,
+  ReloadOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons'
-import { speechApi, WhisperRuntimeStatus, WhisperModel } from '../services/api'
+import {
+  speechApi,
+  SpeechRecognitionConfig as SpeechConfig,
+  WhisperModel,
+  WhisperRuntimeStatus,
+} from '../services/api'
 
 const { Text, Paragraph } = Typography
 
@@ -15,41 +35,53 @@ interface SpeechRecognitionConfigProps {
 }
 
 const accuracyColor: Record<string, string> = {
-  最高: 'green', 高: 'green', 较好: 'blue', 中等: 'gold', 较低: 'default',
+  '最高': 'green',
+  '高': 'green',
+  '较好': 'blue',
+  '中等': 'gold',
+  '较低': 'default',
 }
 
 const SpeechRecognitionConfig: React.FC<SpeechRecognitionConfigProps> = () => {
   const [runtime, setRuntime] = useState<WhisperRuntimeStatus | null>(null)
   const [models, setModels] = useState<WhisperModel[]>([])
+  const [speechConfig, setSpeechConfig] = useState<SpeechConfig | null>(null)
   const [loading, setLoading] = useState(true)
+  const [switchingModel, setSwitchingModel] = useState<string | null>(null)
   const timer = useRef<number | null>(null)
 
   const refresh = useCallback(async () => {
     try {
-      const [rt, ms] = await Promise.all([speechApi.getRuntimeStatus(), speechApi.getModels()])
+      const [rt, ms, cfg] = await Promise.all([
+        speechApi.getRuntimeStatus(),
+        speechApi.getModels(),
+        speechApi.getConfig(),
+      ])
       setRuntime(rt)
       setModels(Array.isArray(ms) ? ms : [])
-    } catch (e) {
-      // 后端可能尚未就绪，静默重试
+      setSpeechConfig(cfg)
     } finally {
       setLoading(false)
     }
   }, [])
 
-  // 安装中或有模型下载中时，加快轮询
   const needsFastPoll = (rt: WhisperRuntimeStatus | null, ms: WhisperModel[]) =>
     rt?.status === 'installing' || ms.some((m) => m.status === 'downloading')
 
   useEffect(() => {
     refresh()
-    return () => { if (timer.current) window.clearInterval(timer.current) }
+    return () => {
+      if (timer.current) window.clearInterval(timer.current)
+    }
   }, [refresh])
 
   useEffect(() => {
     if (timer.current) window.clearInterval(timer.current)
     const interval = needsFastPoll(runtime, models) ? 2000 : 15000
     timer.current = window.setInterval(refresh, interval)
-    return () => { if (timer.current) window.clearInterval(timer.current) }
+    return () => {
+      if (timer.current) window.clearInterval(timer.current)
+    }
   }, [runtime, models, refresh])
 
   const handleInstall = async () => {
@@ -68,7 +100,7 @@ const SpeechRecognitionConfig: React.FC<SpeechRecognitionConfigProps> = () => {
       const r = await speechApi.uninstallRuntime()
       message.success(r.message || '已卸载')
       refresh()
-    } catch (e: any) {
+    } catch {
       message.error('卸载失败')
     }
   }
@@ -89,8 +121,37 @@ const SpeechRecognitionConfig: React.FC<SpeechRecognitionConfigProps> = () => {
       await speechApi.deleteModel(model)
       message.success(`已删除模型 ${model}`)
       refresh()
-    } catch (e) {
+    } catch {
       message.error('删除失败')
+    }
+  }
+
+  const handleUseModel = async (model: string) => {
+    if (!speechConfig) return
+
+    setSwitchingModel(model)
+    try {
+      await speechApi.updateConfig({
+        method: speechConfig.method || 'whisper_local',
+        whisper_config: {
+          ...speechConfig.whisper_config,
+          model_name: model,
+        },
+        enable_fallback: speechConfig.enable_fallback,
+        fallback_method: speechConfig.fallback_method,
+        output_format: speechConfig.output_format,
+      })
+      setSpeechConfig((prev) => (
+        prev
+          ? { ...prev, whisper_config: { ...prev.whisper_config, model_name: model } }
+          : prev
+      ))
+      message.success(`已切换为 ${model}，下一个新任务或重试任务生效`)
+      refresh()
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || '切换模型失败')
+    } finally {
+      setSwitchingModel(null)
     }
   }
 
@@ -99,6 +160,7 @@ const SpeechRecognitionConfig: React.FC<SpeechRecognitionConfigProps> = () => {
   const installed = runtime?.status === 'installed'
   const installing = runtime?.status === 'installing'
   const supported = runtime?.platform_supported !== false
+  const currentModel = speechConfig?.whisper_config?.model_name
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
@@ -106,24 +168,32 @@ const SpeechRecognitionConfig: React.FC<SpeechRecognitionConfigProps> = () => {
         type="info"
         showIcon
         message="什么时候需要 Whisper？"
-        description="当导入的视频自带字幕（例如 B站 的 AI 字幕）时，会直接使用现成字幕，无需 Whisper。只有当视频没有字幕时，才需要本地 Whisper 来自动转写生成字幕。Whisper 为按需安装，装不装、装哪个模型都由你决定。"
+        description="导入的视频自带字幕时会直接使用现成字幕。只有当视频没有字幕时，才需要本地 Whisper 自动转写生成字幕。"
       />
 
       {!supported && (
-        <Alert type="warning" showIcon message="当前平台不支持"
-          description="mlx-whisper 仅支持 Apple Silicon (M 系列) Mac。" />
+        <Alert
+          type="warning"
+          showIcon
+          message="当前平台不支持"
+          description="当前 Whisper 运行时不可用于此平台。"
+        />
       )}
 
-      {/* 运行时 */}
       <Card size="small" title={<Space><ThunderboltOutlined />Whisper 运行时</Space>}>
         {installed && (
           <Space direction="vertical" style={{ width: '100%' }}>
             <Space>
               <CheckCircleFilled style={{ color: '#52c41a' }} />
               <Text strong>已安装</Text>
-              <Text type="secondary">（{(runtime?.packages || []).join(', ')}）</Text>
+              <Text type="secondary">({(runtime?.packages || []).join(', ')})</Text>
             </Space>
-            <Popconfirm title="卸载 Whisper 运行时？已下载的模型不会被删除。" onConfirm={handleUninstall} okText="卸载" cancelText="取消">
+            <Popconfirm
+              title="卸载 Whisper 运行时？已下载的模型不会被删除。"
+              onConfirm={handleUninstall}
+              okText="卸载"
+              cancelText="取消"
+            >
               <Button danger size="small" icon={<DeleteOutlined />}>卸载运行时</Button>
             </Popconfirm>
           </Space>
@@ -131,7 +201,7 @@ const SpeechRecognitionConfig: React.FC<SpeechRecognitionConfigProps> = () => {
 
         {installing && (
           <Space direction="vertical" style={{ width: '100%' }}>
-            <Text>正在安装… {runtime?.message}</Text>
+            <Text>正在安装...{runtime?.message}</Text>
             <Progress percent={runtime?.progress ?? 5} status="active" />
             {runtime?.log_tail && (
               <pre style={{ maxHeight: 120, overflow: 'auto', background: '#1a1a1a', color: '#bbb', padding: 8, fontSize: 11, borderRadius: 4, margin: 0 }}>
@@ -144,7 +214,7 @@ const SpeechRecognitionConfig: React.FC<SpeechRecognitionConfigProps> = () => {
         {runtime?.status === 'not_installed' && (
           <Space direction="vertical" style={{ width: '100%' }}>
             <Paragraph type="secondary" style={{ marginBottom: 8 }}>
-              尚未安装。安装会下载 faster-whisper 运行时（约 200–400MB，不含 PyTorch），完成后再选择并下载一个模型即可使用。
+              尚未安装。安装会下载 faster-whisper 运行时，完成后再选择并下载一个模型即可使用。
             </Paragraph>
             <Button type="primary" icon={<DownloadOutlined />} onClick={handleInstall} disabled={!supported}>
               安装 Whisper
@@ -160,24 +230,54 @@ const SpeechRecognitionConfig: React.FC<SpeechRecognitionConfigProps> = () => {
         )}
       </Card>
 
-      {/* 模型 */}
       <Card size="small" title="Whisper 模型">
+        {installed && currentModel && (
+          <Alert
+            type="success"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message={`当前使用：${currentModel}`}
+            description="切换模型只影响下一个新任务或重试任务，已经开始的字幕识别不会中途切换。"
+          />
+        )}
+
         {!installed && (
           <Text type="secondary">请先安装 Whisper 运行时，然后在这里下载模型。</Text>
         )}
+
         {installed && (
           <List
             dataSource={models}
             renderItem={(m) => {
               const downloaded = m.status === 'downloaded'
               const downloading = m.status === 'downloading'
+              const isCurrent = downloaded && m.name === currentModel
               return (
                 <List.Item
                   actions={[
                     downloaded ? (
-                      <Popconfirm title={`删除模型 ${m.name}？`} onConfirm={() => handleDelete(m.name)} okText="删除" cancelText="取消">
-                        <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
-                      </Popconfirm>
+                      <Space>
+                        {isCurrent ? (
+                          <Button size="small" disabled icon={<CheckCircleFilled />}>当前使用</Button>
+                        ) : (
+                          <Button
+                            size="small"
+                            type="primary"
+                            loading={switchingModel === m.name}
+                            onClick={() => handleUseModel(m.name)}
+                          >
+                            使用此模型
+                          </Button>
+                        )}
+                        <Popconfirm
+                          title={`删除模型 ${m.name}？`}
+                          onConfirm={() => handleDelete(m.name)}
+                          okText="删除"
+                          cancelText="取消"
+                        >
+                          <Button size="small" danger icon={<DeleteOutlined />} disabled={isCurrent}>删除</Button>
+                        </Popconfirm>
+                      </Space>
                     ) : downloading ? (
                       <Button size="small" loading disabled>下载中</Button>
                     ) : (
@@ -189,10 +289,11 @@ const SpeechRecognitionConfig: React.FC<SpeechRecognitionConfigProps> = () => {
                 >
                   <List.Item.Meta
                     title={
-                      <Space>
+                      <Space wrap>
                         <Text strong>{m.name}</Text>
                         <Text type="secondary">{m.size}</Text>
                         {downloaded && <Tag color="green">已下载</Tag>}
+                        {isCurrent && <Tag color="blue">当前使用</Tag>}
                         <Tag color={accuracyColor[m.accuracy] || 'default'}>准确度 {m.accuracy}</Tag>
                         <Tooltip title="速度"><Tag>{m.speed}</Tag></Tooltip>
                       </Space>

@@ -715,6 +715,22 @@ export interface WhisperModel {
   errorMessage?: string | null
 }
 
+export interface SpeechRecognitionConfig {
+  method: string
+  whisper_config: {
+    model_name: string
+    language: string
+    custom_models_dir?: string
+    enable_timestamps?: boolean
+    enable_punctuation?: boolean
+    enable_speaker_diarization?: boolean
+    timeout?: number
+  }
+  enable_fallback?: boolean
+  fallback_method?: string
+  output_format?: string
+}
+
 // 语音识别 / Whisper 运行时与模型管理
 export const speechApi = {
   getRuntimeStatus: (): Promise<WhisperRuntimeStatus> => api.get('/whisper/runtime-status'),
@@ -723,6 +739,8 @@ export const speechApi = {
   getModels: (): Promise<WhisperModel[]> => api.get('/whisper-models'),
   downloadModel: (model: string): Promise<unknown> => api.post('/whisper-models/download', { model }),
   deleteModel: (model: string): Promise<unknown> => api.delete(`/whisper-models/${model}`),
+  getConfig: (): Promise<SpeechRecognitionConfig> => api.get('/speech-recognition/config'),
+  updateConfig: (config: Partial<SpeechRecognitionConfig>): Promise<unknown> => api.put('/speech-recognition/config', config),
 }
 
 export default api

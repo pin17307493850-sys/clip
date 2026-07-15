@@ -40,6 +40,7 @@ export const useFirstRun = () => {
           const hasApiKey = settings.api?.api_keys?.dashscope || 
                            settings.api?.api_keys?.openai ||
                            settings.api?.api_keys?.ai302 ||
+                           settings.api?.api_keys?.deepseek ||
                            settings.api?.api_keys?.gemini ||
                            settings.api?.api_keys?.siliconflow
           

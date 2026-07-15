@@ -47,6 +47,14 @@ const SettingsPage: React.FC = () => {
       apiKeyField: 'ai302_api_key',
       placeholder: '请输入 302.AI API Key'
     },
+    deepseek: {
+      name: 'DeepSeek',
+      icon: <RobotOutlined />,
+      color: '#13c2c2',
+      description: 'DeepSeek 官方模型服务',
+      apiKeyField: 'deepseek_api_key',
+      placeholder: '请输入 DeepSeek API Key'
+    },
     gemini: {
       name: 'Google Gemini',
       icon: <RobotOutlined />,
@@ -108,6 +116,7 @@ const SettingsPage: React.FC = () => {
           dashscope_api_key: settingsData.api?.api_keys?.dashscope || '',
           openai_api_key: settingsData.api?.api_keys?.openai || '',
           ai302_api_key: settingsData.api?.api_keys?.ai302 || '',
+          deepseek_api_key: settingsData.api?.api_keys?.deepseek || '',
           gemini_api_key: settingsData.api?.api_keys?.gemini || '',
           siliconflow_api_key: settingsData.api?.api_keys?.siliconflow || '',
           jimeng_access_key: settingsData.api?.api_keys?.jimeng_access || '',
@@ -134,6 +143,7 @@ const SettingsPage: React.FC = () => {
           dashscope_api_key: '',
           openai_api_key: '',
           ai302_api_key: '',
+          deepseek_api_key: '',
           gemini_api_key: '',
           siliconflow_api_key: '',
           jimeng_access_key: '',
@@ -214,6 +224,7 @@ const SettingsPage: React.FC = () => {
             dashscope: values.dashscope_api_key || existingApiKeys.dashscope || "",
             openai: values.openai_api_key || existingApiKeys.openai || "",
             ai302: values.ai302_api_key || existingApiKeys.ai302 || "",
+            deepseek: values.deepseek_api_key || existingApiKeys.deepseek || "",
             gemini: values.gemini_api_key || existingApiKeys.gemini || "",
             siliconflow: values.siliconflow_api_key || existingApiKeys.siliconflow || "",
             jimeng_access: values.jimeng_access_key || existingApiKeys.jimeng_access || "",
@@ -424,6 +435,12 @@ const SettingsPage: React.FC = () => {
                       <Select.Option value="gpt-4.1-mini">gpt-4.1-mini</Select.Option>
                       <Select.Option value="gpt-4.1-nano">gpt-4.1-nano</Select.Option>
                     </Select.OptGroup>
+
+                    {/* DeepSeek模型 */}
+                    <Select.OptGroup label="DeepSeek">
+                      <Select.Option value="deepseek-v4-flash">deepseek-v4-flash (DeepSeek V4 Flash)</Select.Option>
+                      <Select.Option value="deepseek-v4-pro">deepseek-v4-pro (DeepSeek V4 Pro)</Select.Option>
+                    </Select.OptGroup>
                     
                     {/* Google Gemini模型 */}
                     <Select.OptGroup label="Google Gemini">
@@ -536,6 +553,7 @@ const SettingsPage: React.FC = () => {
                     系统支持多个AI模型提供商：
                     <br />• <Text strong>阿里通义千问</Text>：访问阿里云控制台获取API密钥
                     <br />• <Text strong>OpenAI</Text>：访问 platform.openai.com 获取API密钥
+                    <br />• <Text strong>DeepSeek</Text>：访问 platform.deepseek.com 获取API密钥
                     <br />• <Text strong>Google Gemini</Text>：访问 ai.google.dev 获取API密钥
                     <br />• <Text strong>硅基流动</Text>：访问 docs.siliconflow.cn 获取API密钥
                   </Paragraph>

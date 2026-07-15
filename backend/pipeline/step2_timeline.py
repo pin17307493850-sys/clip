@@ -12,6 +12,8 @@ from collections import defaultdict
 from ..utils.llm_client import LLMClient
 from ..utils.text_processor import TextProcessor
 from ..core.shared_config import PROMPT_FILES, METADATA_DIR
+from .clip_dedup import dedupe_clips_by_time
+from .product_clip_logic import enrich_product_logic_clips
 
 logger = logging.getLogger(__name__)
 
@@ -215,6 +217,14 @@ class TimelineExtractor:
                 all_timeline_data.extend(chunk_data)
 
         logger.info(f"成功从 {len(chunk_files)} 个块文件中加载了 {len(all_timeline_data)} 个话题。")
+
+        all_timeline_data = enrich_product_logic_clips(
+            all_timeline_data,
+            outlines,
+            self.srt_chunks_dir,
+            self.text_processor,
+        )
+        all_timeline_data = dedupe_clips_by_time(all_timeline_data, "step2_timeline")
         
         # 最终排序：在返回所有结果前，按开始时间进行全局排序
         if all_timeline_data:

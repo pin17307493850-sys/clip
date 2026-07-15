@@ -54,21 +54,154 @@ def _range_key(clip: Dict[str, Any]) -> Optional[Tuple[int, int]]:
     return round(start), round(end)
 
 
-def _quality_key(clip: Dict[str, Any]) -> Tuple[float, float, int, int]:
+def _quality_key(clip: Dict[str, Any]) -> Tuple[float, float, int, int, int]:
     score = float(clip.get("final_score", clip.get("score", 0)) or 0)
     clip_range = _clip_range(clip)
     duration = (clip_range[1] - clip_range[0]) if clip_range else 0
     text_len = len(str(clip.get("content") or "")) + len(str(clip.get("recommend_reason") or ""))
     has_title = 1 if (clip.get("generated_title") or clip.get("title")) else 0
-    return score, duration, text_len, has_title
+    duration_fit = -abs(duration - 45)
+    product_specificity = len(_product_key(clip))
+    return score, duration_fit, product_specificity, text_len, has_title
+
+
+def _compact_text(value: Any) -> str:
+    return re.sub(r"[\s()（）《》【】\-_:/·,，。；;、]+", "", str(value or ""))
+
+
+def _product_key(clip: Dict[str, Any]) -> str:
+    product = clip.get("product") or clip.get("product_name")
+    if product:
+        return _compact_text(product)[:48]
+    text = " ".join(
+        str(clip.get(key) or "")
+        for key in ("generated_title", "title", "outline")
+    )
+    return _compact_text(text)[:48]
+
+
+def _aspect_key(clip: Dict[str, Any]) -> str:
+    explicit = clip.get("product_aspect")
+    if explicit:
+        return str(explicit)
+    text = " ".join(
+        str(clip.get(key) or "")
+        for key in ("selling_point", "outline", "generated_title", "title", "content")
+    )
+    aspect_words = {
+        "packaging": ("包装", "礼盒", "套装", "颜色", "设计", "插画", "材质", "工艺"),
+        "flavor": ("口味", "味道", "香气", "入口", "酸甜", "清爽", "冷泡", "热泡", "功效"),
+        "price": ("价格", "到手", "优惠", "券", "链接", "拍下", "下单", "月销"),
+        "gift": ("赠品", "送", "赠", "杯垫", "茶勺", "权益"),
+        "audience": ("适合", "人群", "女生", "老人", "小孩", "送礼", "自用"),
+    }
+    for aspect, words in aspect_words.items():
+        if any(word in text for word in words):
+            return aspect
+    return "general"
+
+
+def _category_key(clip: Dict[str, Any]) -> str:
+    product_text = _product_key(clip)
+    text = " ".join(
+        str(clip.get(key) or "")
+        for key in ("product", "product_name", "generated_title", "title", "outline", "content")
+    )
+    priority_categories = {
+        "tea_pet": ("茶宠", "兔兔茶丛", "小兔子"),
+        "tea": ("乌龙茶", "花茶", "果茶", "茶砖", "桂花", "茉莉", "樱花", "朗姆", "礼盒"),
+        "jewelry": ("手链", "项链", "耳钉", "戒指", "饰品", "编绳"),
+        "jewelry_box": ("首饰盒", "抱抱兔", "胡桃夹子", "魔术师兔兔", "笑茶系列", "瑕疵款", "微瑕"),
+    }
+    for category, words in priority_categories.items():
+        if any(word in product_text for word in words):
+            return category
+
+    categories = {
+        "jewelry_box": ("首饰盒", "抱抱兔", "胡桃夹子", "魔术师兔兔", "笑茶系列", "瑕疵款", "微瑕"),
+        "tea_pet": ("茶宠", "兔兔茶丛", "小兔子"),
+        "tea": ("乌龙茶", "花茶", "果茶", "茶砖", "桂花", "茉莉", "樱花", "朗姆", "礼盒"),
+        "jewelry": ("手链", "项链", "耳钉", "戒指", "饰品", "编绳"),
+    }
+    for category, words in categories.items():
+        if any(word in text for word in words):
+            return category
+    return ""
+
+
+def _product_is_related(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    if left in right or right in left:
+        return True
+    shared = set(left) & set(right)
+    return len(shared) >= 3 and len(shared) / max(min(len(left), len(right)), 1) >= 0.45
+
+
+def _is_heavily_overlapped(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+    left_range = _clip_range(left)
+    right_range = _clip_range(right)
+    if not left_range or not right_range:
+        return False
+
+    left_product = _product_key(left)
+    right_product = _product_key(right)
+    left_aspect = _aspect_key(left)
+    right_aspect = _aspect_key(right)
+
+    left_start, left_end = left_range
+    right_start, right_end = right_range
+    overlap = min(left_end, right_end) - max(left_start, right_start)
+    if overlap <= 0:
+        return False
+
+    left_duration = left_end - left_start
+    right_duration = right_end - right_start
+    shorter_duration = min(left_duration, right_duration)
+    longer_duration = max(left_duration, right_duration)
+    union = max(left_end, right_end) - min(left_start, right_start)
+    if shorter_duration <= 0 or longer_duration <= 0 or union <= 0:
+        return False
+
+    shorter_coverage = overlap / shorter_duration
+    longer_coverage = overlap / longer_duration
+    union_coverage = overlap / union
+    same_start = abs(left_start - right_start) <= 3
+    same_end = abs(left_end - right_end) <= 3
+
+    if left_product and right_product and left_product != right_product:
+        same_category = _category_key(left) and _category_key(left) == _category_key(right)
+        related_product = _product_is_related(left_product, right_product)
+        if same_category and shorter_coverage >= 0.95 and union_coverage >= 0.25:
+            return True
+        if same_category and left_aspect != right_aspect and union_coverage < 0.82:
+            return False
+        return (
+            union_coverage >= 0.82
+            or (same_start and same_end)
+            or (same_category and shorter_coverage >= 0.82 and union_coverage >= 0.25)
+            or (related_product and shorter_coverage >= 0.85 and union_coverage >= 0.45)
+        )
+
+    if left_aspect != right_aspect and union_coverage < 0.9:
+        return False
+
+    # Same-window duplicates can differ by a few seconds after padding or local
+    # fallback recovery. Treat a near-contained short clip as duplicate only
+    # when one boundary is effectively the same, so adjacent product sections
+    # are not collapsed by accident.
+    return union_coverage >= 0.65 or (
+        shorter_coverage >= 0.8 and (longer_coverage >= 0.45 or same_start or same_end)
+    )
 
 
 def dedupe_clips_by_time(clips: List[Dict[str, Any]], source: str = "clips") -> List[Dict[str, Any]]:
-    """Keep one clip for each rounded start/end range.
+    """Remove exact and heavily overlapping duplicate clip candidates.
 
     The LLM can occasionally return duplicate candidates with different ids but
-    identical time ranges. Keeping the highest-quality candidate here prevents
-    duplicate exports, collections, and database rows downstream.
+    identical or near-contained time ranges. Keeping the highest-quality
+    candidate here prevents duplicate exports, collections, and database rows
+    downstream while preserving adjacent product explanations.
     """
     if not clips:
         return []
@@ -92,7 +225,31 @@ def dedupe_clips_by_time(clips: List[Dict[str, Any]], source: str = "clips") -> 
         if _quality_key(clip) > _quality_key(existing):
             best_by_range[key] = clip
 
-    deduped = passthrough + list(best_by_range.values())
+    exact_deduped = passthrough + list(best_by_range.values())
+    exact_deduped.sort(key=lambda item: (_time_to_seconds(item.get("start_time")) or 0, _time_to_seconds(item.get("end_time")) or 0))
+
+    deduped: List[Dict[str, Any]] = []
+    for clip in exact_deduped:
+        if _clip_range(clip) is None:
+            deduped.append(clip)
+            continue
+
+        duplicate_indexes = [
+            index
+            for index, existing in enumerate(deduped)
+            if _is_heavily_overlapped(clip, existing)
+        ]
+        if not duplicate_indexes:
+            deduped.append(clip)
+            continue
+
+        duplicates += len(duplicate_indexes)
+        candidates = [clip] + [deduped[index] for index in duplicate_indexes]
+        best = max(candidates, key=_quality_key)
+        for index in reversed(duplicate_indexes):
+            deduped.pop(index)
+        deduped.append(best)
+
     deduped.sort(key=lambda item: (_time_to_seconds(item.get("start_time")) or 0, _time_to_seconds(item.get("end_time")) or 0))
 
     if duplicates:

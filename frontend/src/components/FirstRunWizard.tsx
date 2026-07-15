@@ -193,6 +193,7 @@ const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ onComplete }) => {
             dashscope: config.llmProvider === 'dashscope' ? config.llmApiKey : (existingApiKeys.dashscope || ''),
             openai: config.llmProvider === 'openai' ? config.llmApiKey : (existingApiKeys.openai || ''),
             ai302: config.llmProvider === '302ai' ? config.llmApiKey : (existingApiKeys.ai302 || ''),
+            deepseek: config.llmProvider === 'deepseek' ? config.llmApiKey : (existingApiKeys.deepseek || ''),
             gemini: config.llmProvider === 'gemini' ? config.llmApiKey : (existingApiKeys.gemini || ''),
             siliconflow: config.llmProvider === 'siliconflow' ? config.llmApiKey : (existingApiKeys.siliconflow || ''),
             jimeng_access: existingApiKeys.jimeng_access || '',
@@ -201,6 +202,7 @@ const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ onComplete }) => {
           api_provider: config.llmProvider,
           api_model: config.llmProvider === 'dashscope' ? 'qwen-plus' : 
                      config.llmProvider === '302ai' ? 'gpt-4o-mini' :
+                     config.llmProvider === 'deepseek' ? 'deepseek-v4-flash' :
                      config.llmProvider === 'openai' ? 'gpt-3.5-turbo' :
                      config.llmProvider === 'gemini' ? 'gemini-pro' : 'qwen-plus',
           api_max_tokens: 4000,
@@ -380,6 +382,11 @@ const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ onComplete }) => {
         url: 'https://302.ai',
         description: '使用 302.AI 的 OpenAI 兼容 API Key'
       },
+      deepseek: {
+        name: 'DeepSeek',
+        url: 'https://platform.deepseek.com',
+        description: '使用 DeepSeek 官方 API Key'
+      },
       gemini: {
         name: 'Google Gemini',
         url: 'https://makersuite.google.com',
@@ -473,6 +480,12 @@ const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ onComplete }) => {
                     <Space>
                       <Text strong>302.AI</Text>
                       <Text type="secondary">(OpenAI 兼容接口)</Text>
+                    </Space>
+                  </Option>
+                  <Option value="deepseek">
+                    <Space>
+                      <Text strong>DeepSeek</Text>
+                      <Text type="secondary">(官方 API)</Text>
                     </Space>
                   </Option>
                   <Option value="gemini">

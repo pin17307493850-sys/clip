@@ -74,6 +74,7 @@ export const checkApiConfig = async (): Promise<ApiConfigStatus> => {
         dashscope: apiKeys.dashscope ? '***' + apiKeys.dashscope.slice(-4) : '未配置',
         openai: apiKeys.openai ? '***' + apiKeys.openai.slice(-4) : '未配置',
         ai302: apiKeys.ai302 ? '***' + apiKeys.ai302.slice(-4) : '未配置',
+        deepseek: apiKeys.deepseek ? '***' + apiKeys.deepseek.slice(-4) : '未配置',
         gemini: apiKeys.gemini ? '***' + apiKeys.gemini.slice(-4) : '未配置',
         siliconflow: apiKeys.siliconflow ? '***' + apiKeys.siliconflow.slice(-4) : '未配置',
         jimeng_access: apiKeys.jimeng_access ? '***' + apiKeys.jimeng_access.slice(-4) : '未配置',
@@ -100,6 +101,11 @@ export const checkApiConfig = async (): Promise<ApiConfigStatus> => {
         currentApiKey = apiKeys.ai302 || ''
         hasValidKey = !!currentApiKey.trim()
         console.log('302.AI API Key检查', { hasKey: !!currentApiKey, keyLength: currentApiKey.length, isValid: hasValidKey })
+        break
+      case 'deepseek':
+        currentApiKey = apiKeys.deepseek || ''
+        hasValidKey = !!currentApiKey.trim()
+        console.log('DeepSeek API Key检查:', { hasKey: !!currentApiKey, keyLength: currentApiKey.length, isValid: hasValidKey })
         break
       case 'gemini':
         currentApiKey = apiKeys.gemini || ''

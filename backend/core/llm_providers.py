@@ -18,6 +18,7 @@ class ProviderType(Enum):
     DASHSCOPE = "dashscope"  # 阿里通义千问
     OPENAI = "openai"        # OpenAI
     AI302 = "302ai"          # 302.AI OpenAI-compatible gateway
+    DEEPSEEK = "deepseek"    # DeepSeek official API
     GEMINI = "gemini"        # Google Gemini
     SILICONFLOW = "siliconflow"  # 硅基流动
 
@@ -372,6 +373,31 @@ class AI302Provider(OpenAIProvider):
             ),
         ]
 
+class DeepSeekProvider(OpenAIProvider):
+    """DeepSeek official OpenAI-compatible provider."""
+
+    def __init__(self, api_key: str, model_name: str = "deepseek-v4-flash", **kwargs):
+        kwargs.setdefault("base_url", "https://api.deepseek.com/v1")
+        super().__init__(api_key, model_name, **kwargs)
+
+    def get_available_models(self) -> List[ModelInfo]:
+        return [
+            ModelInfo(
+                name="deepseek-v4-flash",
+                display_name="DeepSeek V4 Flash",
+                provider=ProviderType.DEEPSEEK,
+                max_tokens=65536,
+                description="DeepSeek 官方快速模型"
+            ),
+            ModelInfo(
+                name="deepseek-v4-pro",
+                display_name="DeepSeek V4 Pro",
+                provider=ProviderType.DEEPSEEK,
+                max_tokens=65536,
+                description="DeepSeek 官方高质量模型"
+            ),
+        ]
+
 class GeminiProvider(LLMProvider):
     """Google Gemini提供商"""
     
@@ -555,6 +581,7 @@ class LLMProviderFactory:
         ProviderType.DASHSCOPE: DashScopeProvider,
         ProviderType.OPENAI: OpenAIProvider,
         ProviderType.AI302: AI302Provider,
+        ProviderType.DEEPSEEK: DeepSeekProvider,
         ProviderType.GEMINI: GeminiProvider,
         ProviderType.SILICONFLOW: SiliconFlowProvider,
     }

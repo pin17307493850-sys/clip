@@ -53,6 +53,7 @@ class ApiKeys(BaseModel):
     dashscope: str = Field(default="", description="通义千问API密钥")
     openai: str = Field(default="", description="OpenAI API密钥")
     ai302: str = Field(default="", description="302.AI API key")
+    deepseek: str = Field(default="", description="DeepSeek API key")
     gemini: str = Field(default="", description="Gemini API密钥")
     siliconflow: str = Field(default="", description="SiliconFlow API密钥")
     jimeng_access: str = Field(default="", description="即梦AI访问密钥")
@@ -211,6 +212,7 @@ async def get_settings():
                     dashscope=config.dashscope_api_key,
                     openai=config.openai_api_key,
                     ai302="",
+                    deepseek="",
                     gemini=config.gemini_api_key,
                     siliconflow=config.siliconflow_api_key,
                     jimeng_access="",  # 默认值
@@ -322,7 +324,7 @@ async def test_api_connection(request: TestApiRequest):
             }
         
         # 根据提供商进行格式验证
-        if request.provider in ["dashscope", "openai", "302ai"]:
+        if request.provider in ["dashscope", "openai", "302ai", "deepseek"]:
             if not request.api_key.startswith("sk-"):
                 return {
                     "success": False,
@@ -340,6 +342,9 @@ async def test_api_connection(request: TestApiRequest):
         elif request.provider == "302ai":
             from backend.core.llm_providers import AI302Provider
             provider_instance = AI302Provider(api_key=request.api_key)
+        elif request.provider == "deepseek":
+            from backend.core.llm_providers import DeepSeekProvider
+            provider_instance = DeepSeekProvider(api_key=request.api_key)
         elif request.provider == "gemini":
             from backend.core.llm_providers import GeminiProvider
             provider_instance = GeminiProvider(api_key=request.api_key)
@@ -365,6 +370,8 @@ async def test_api_connection(request: TestApiRequest):
                 error_msg += "。请检查API Key是否正确，DashScope API Key通常以'sk-'开头"
             elif request.provider == "openai":
                 error_msg += "。请检查API Key是否正确，OpenAI API Key通常以'sk-'开头"
+            elif request.provider == "deepseek":
+                error_msg += "。请检查 DeepSeek API Key 是否正确"
             elif request.provider == "gemini":
                 error_msg += "。请检查API Key是否正确"
             elif request.provider == "siliconflow":
@@ -646,6 +653,10 @@ async def get_available_models():
                 {"name": "gpt-4.1-mini", "display_name": "GPT-4.1 Mini", "max_tokens": 1000000, "description": "通过 302.AI OpenAI 兼容接口访问"},
                 {"name": "gpt-4.1-nano", "display_name": "GPT-4.1 Nano", "max_tokens": 1000000, "description": "通过 302.AI OpenAI 兼容接口访问"}
             ],
+            "deepseek": [
+                {"name": "deepseek-v4-flash", "display_name": "DeepSeek V4 Flash", "max_tokens": 65536, "description": "DeepSeek 官方快速模型"},
+                {"name": "deepseek-v4-pro", "display_name": "DeepSeek V4 Pro", "max_tokens": 65536, "description": "DeepSeek 官方高质量模型"}
+            ],
             "gemini": [
                 {"name": "gemini-1.5-pro", "display_name": "Gemini 1.5 Pro", "max_tokens": 2000000, "description": "最新专业版"},
                 {"name": "gemini-1.5-flash", "display_name": "Gemini 1.5 Flash", "max_tokens": 1000000, "description": "快速响应版本"},
@@ -685,6 +696,7 @@ async def get_current_provider():
             "dashscope": "通义千问",
             "openai": "OpenAI",
             "302ai": "302.AI",
+            "deepseek": "DeepSeek",
             "gemini": "Google Gemini",
             "siliconflow": "硅基流动",
         }

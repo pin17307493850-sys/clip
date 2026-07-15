@@ -68,6 +68,7 @@ class LLMManager:
             "dashscope_api_key": "",
             "openai_api_key": "",
             "ai302_api_key": "",
+            "deepseek_api_key": "",
             "gemini_api_key": "",
             "siliconflow_api_key": "",
             "model_name": "qwen-plus",
@@ -88,6 +89,7 @@ class LLMManager:
                             "dashscope_api_key": api_keys.get("dashscope", ""),
                             "openai_api_key": api_keys.get("openai", ""),
                             "ai302_api_key": api_keys.get("ai302", ""),
+                            "deepseek_api_key": api_keys.get("deepseek", ""),
                             "gemini_api_key": api_keys.get("gemini", ""),
                             "siliconflow_api_key": api_keys.get("siliconflow", ""),
                             "model_name": saved_settings["api"].get("api_model", "qwen-plus"),
@@ -140,6 +142,7 @@ class LLMManager:
             ProviderType.DASHSCOPE: "dashscope_api_key",
             ProviderType.OPENAI: "openai_api_key",
             ProviderType.AI302: "ai302_api_key",
+            ProviderType.DEEPSEEK: "deepseek_api_key",
             ProviderType.GEMINI: "gemini_api_key",
             ProviderType.SILICONFLOW: "siliconflow_api_key",
         }
@@ -169,6 +172,7 @@ class LLMManager:
                 ProviderType.DASHSCOPE: "dashscope_api_key",
                 ProviderType.OPENAI: "openai_api_key",
                 ProviderType.AI302: "ai302_api_key",
+                ProviderType.DEEPSEEK: "deepseek_api_key",
                 ProviderType.GEMINI: "gemini_api_key",
                 ProviderType.SILICONFLOW: "siliconflow_api_key",
             }
@@ -248,6 +252,7 @@ class LLMManager:
             ProviderType.DASHSCOPE: "阿里通义千问",
             ProviderType.OPENAI: "OpenAI",
             ProviderType.AI302: "302.AI",
+            ProviderType.DEEPSEEK: "DeepSeek",
             ProviderType.GEMINI: "Google Gemini",
             ProviderType.SILICONFLOW: "硅基流动"
         }

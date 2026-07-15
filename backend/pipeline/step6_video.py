@@ -302,6 +302,8 @@ def run_step6_video(clips_with_titles_path: Path, collections_path: Path,
     # 加载数据
     with open(clips_with_titles_path, 'r', encoding='utf-8') as f:
         clips_with_titles = json.load(f)
+    clips_with_titles = dedupe_clips_by_time(clips_with_titles, "step6_video_input")
+    valid_clip_ids = {str(clip.get("id")) for clip in clips_with_titles}
     
     collections_data = []
     if collections_path and collections_path.exists() and collections_path.stat().st_size > 0:
@@ -310,6 +312,22 @@ def run_step6_video(clips_with_titles_path: Path, collections_path: Path,
                 collections_data = json.load(f)
         except Exception as exc:
             logger.warning("Collection metadata is invalid, continuing without collections: %s", exc)
+
+    filtered_collections = []
+    for collection in collections_data:
+        if not isinstance(collection, dict):
+            continue
+        clip_ids = [
+            str(clip_id)
+            for clip_id in collection.get("clip_ids", [])
+            if str(clip_id) in valid_clip_ids
+        ]
+        if not clip_ids:
+            continue
+        collection = dict(collection)
+        collection["clip_ids"] = clip_ids
+        filtered_collections.append(collection)
+    collections_data = filtered_collections
     
     # 创建视频生成器
     generator = VideoGenerator(clips_dir=clips_dir, collections_dir=collections_dir, metadata_dir=metadata_dir)

@@ -164,6 +164,11 @@ class TimelineExtractor:
                             )
                             
                             if parsed_items:
+                                parsed_items = self._apply_product_completion_guard(
+                                    parsed_items,
+                                    chunk_outlines,
+                                    srt_chunk_data,
+                                )
                                 # 保存解析后的结果
                                 with open(chunk_output_path, 'w', encoding='utf-8') as f:
                                     json.dump(parsed_items, f, ensure_ascii=False, indent=2)
@@ -262,6 +267,11 @@ class TimelineExtractor:
                     chunk_index
                 )
                 if parsed_items:
+                    parsed_items = self._apply_product_completion_guard(
+                        parsed_items,
+                        batch_outlines,
+                        srt_chunk_data,
+                    )
                     chunk_items.extend(parsed_items)
                     self._save_partial_chunk(chunk_index, chunk_items)
                 self._emit_timeline_progress(batch_number, total_batches, "已读取时间线缓存")
@@ -315,6 +325,11 @@ class TimelineExtractor:
                     )
 
                     if parsed_items:
+                        parsed_items = self._apply_product_completion_guard(
+                            parsed_items,
+                            batch_outlines,
+                            srt_chunk_data,
+                        )
                         chunk_items.extend(parsed_items)
                         self._save_partial_chunk(chunk_index, chunk_items)
                         logger.info(
@@ -363,6 +378,162 @@ class TimelineExtractor:
                     continue
 
         return chunk_items
+
+    def _apply_product_completion_guard(
+        self,
+        parsed_items: List[Dict],
+        outlines: List[Dict],
+        srt_chunk_data: List[Dict],
+    ) -> List[Dict]:
+        """Keep product explanations from being cut too early.
+
+        Live product streams often describe the product first, then continue
+        with specs, usage, price, gifts, and purchase guidance. The model may
+        correctly explain that the full range should be kept, but still emit a
+        JSON end time that stops at the first selling point. Extend product clips
+        toward the outline hint plus a small closing grace window when later
+        subtitles still look like the same product explanation.
+        """
+        if not parsed_items or not outlines or not srt_chunk_data:
+            return parsed_items
+
+        suite_words = ("礼盒", "套装", "套餐", "组合")
+        product_words = (
+            "产品", "茶", "果茶", "乌龙", "花茶", "首饰", "项链", "手链", "耳钉",
+            "戒指", "茶宠", "兔兔", "礼盒", "套装", "套餐", "组合", "杯垫",
+        )
+        closing_words = (
+            "价格", "链接", "拍下", "带回家", "赠", "送", "杯垫", "茶勺",
+            "黄冰糖", "粉丝团", "会员", "188", "309", "四罐", "小圆罐",
+            "门店", "直播间", "到手", "下单", "拍", "买", "换", "送礼",
+            "适合", "老人", "小孩", "女生", "冷泡", "热泡", "口味", "味道",
+            "香", "入口", "配料", "原料", "工艺", "包装", "设计", "材质",
+        )
+        hard_stop_words = (
+            "下一个", "另外", "第二个", "第三个", "首先第一个", "接下来",
+            "再看", "我们换", "上车吧", "小助理",
+        )
+
+        def text_of(value: Any) -> str:
+            if value is None:
+                return ""
+            if isinstance(value, (list, tuple)):
+                return " ".join(text_of(item) for item in value)
+            if isinstance(value, dict):
+                return " ".join(text_of(item) for item in value.values())
+            return str(value)
+
+        def seconds(value: Any) -> Optional[float]:
+            if not value:
+                return None
+            try:
+                return self.text_processor.time_to_seconds(self._convert_time_format(str(value)))
+            except Exception:
+                return None
+
+        def srt_time(value: float) -> str:
+            value = max(0.0, float(value))
+            whole = int(value)
+            milliseconds = int(round((value - whole) * 1000))
+            if milliseconds >= 1000:
+                whole += 1
+                milliseconds -= 1000
+            hours = whole // 3600
+            minutes = (whole % 3600) // 60
+            secs = whole % 60
+            return f"{hours:02d}:{minutes:02d}:{secs:02d},{milliseconds:03d}"
+
+        outline_by_product: Dict[str, Dict] = {}
+        product_outlines: List[Dict] = []
+        for outline in outlines:
+            combined = text_of(outline)
+            if not any(word in combined for word in product_words):
+                continue
+            product_outlines.append(outline)
+            product = str(outline.get("product") or "").strip()
+            if product:
+                outline_by_product[product] = outline
+
+        if not product_outlines:
+            return parsed_items
+
+        subtitles = []
+        for sub in srt_chunk_data:
+            start = seconds(sub.get("start_time"))
+            end = seconds(sub.get("end_time"))
+            if start is None or end is None:
+                continue
+            subtitles.append((start, end, str(sub.get("text") or "").strip()))
+
+        adjusted_items = []
+        for item in parsed_items:
+            item_text = text_of(item)
+            product = str(item.get("product") or "").strip()
+            is_suite = any(word in item_text for word in suite_words)
+            if not product and not any(word in item_text for word in product_words):
+                adjusted_items.append(item)
+                continue
+
+            outline = outline_by_product.get(product)
+            if outline is None:
+                outline = next((candidate for candidate in product_outlines if product and product in text_of(candidate)), None)
+            if outline is None:
+                outline = product_outlines[0] if len(product_outlines) == 1 else None
+            if outline is None:
+                adjusted_items.append(item)
+                continue
+
+            start_sec = seconds(item.get("start_time"))
+            end_sec = seconds(item.get("end_time"))
+            hint_end = seconds(outline.get("end_time"))
+            if start_sec is None or end_sec is None or hint_end is None or hint_end <= end_sec:
+                adjusted_items.append(item)
+                continue
+
+            # A short grace window catches final price/link sentences that often
+            # land just after the outline hint in live streams. Suites can be
+            # longer because they naturally contain child products.
+            max_duration = 150 if is_suite else 110
+            grace = 12 if is_suite else 6
+            target_limit = min(hint_end + grace, start_sec + max_duration)
+            target_end = end_sec
+            for sub_start, sub_end, sub_text in subtitles:
+                if sub_start < end_sec or sub_start > hint_end + 45:
+                    continue
+                if any(word in sub_text for word in hard_stop_words) and sub_start > hint_end + grace:
+                    break
+                if any(word in sub_text for word in closing_words):
+                    target_end = max(target_end, min(sub_end, target_limit))
+
+            if target_end <= end_sec + 3:
+                adjusted_items.append(item)
+                continue
+
+            content_lines = [
+                sub_text
+                for sub_start, sub_end, sub_text in subtitles
+                if sub_text and sub_end >= start_sec and sub_start <= target_end
+            ]
+            adjusted = dict(item)
+            adjusted["end_time"] = srt_time(target_end)
+            adjusted["duration"] = round(target_end - start_sec, 2)
+            adjusted["duration_seconds"] = round(target_end - start_sec, 2)
+            if content_lines:
+                adjusted["content"] = " ".join(content_lines)
+            adjusted["product_completion_guard"] = True
+            adjusted["cut_reason"] = (
+                f"{adjusted.get('cut_reason', '')} "
+                "产品完整度兜底：该片段后续仍包含规格、价格、赠品、场景或购买信息，已延展到更完整的成交闭环。"
+            ).strip()
+            logger.info(
+                "Product completion guard extended %s from %s to %s",
+                product or adjusted.get("outline"),
+                item.get("end_time"),
+                adjusted["end_time"],
+            )
+            adjusted_items.append(adjusted)
+
+        return adjusted_items
 
     def _save_partial_chunk(self, chunk_index: int, chunk_items: List[Dict]) -> None:
         if not chunk_items:

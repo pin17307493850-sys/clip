@@ -106,10 +106,12 @@
   height: 100%;
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
 .video-container {
   flex: 1;
+  min-height: 0;
   position: relative;
   background: #000;
   display: flex;
@@ -118,9 +120,27 @@
 }
 
 .video-info-bar {
+  flex: 0 0 auto;
   background: var(--ac-card);
   padding: 12px 16px;
   border-top: 1px solid var(--ac-line);
+}
+
+.collection-progress {
+  width: 100%;
+  height: 8px;
+  margin-bottom: 10px;
+  border-radius: 999px;
+  background: var(--ac-line-2);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.collection-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ac-accent);
+  transition: width 0.12s linear;
 }
 
 .video-info-content {

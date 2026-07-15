@@ -1395,11 +1395,41 @@ async def get_collection_thumbnail(
         if str(collection.project_id) != project_id:
             raise HTTPException(status_code=400, detail="合集不属于指定项目")
         
-        # 检查是否有封面
-        if not collection.thumbnail_path:
-            raise HTTPException(status_code=404, detail="合集封面不存在")
-        
-        thumbnail_path = Path(collection.thumbnail_path)
+        thumbnail_path = Path(collection.thumbnail_path) if collection.thumbnail_path else None
+        if not thumbnail_path or not thumbnail_path.exists():
+            from ...core.path_utils import get_project_directory
+            from ...utils.video_processor import VideoProcessor
+
+            project_dir = get_project_directory(project_id)
+            collections_dir = project_dir / "output" / "collections"
+            collections_dir.mkdir(parents=True, exist_ok=True)
+
+            safe_name = VideoProcessor.sanitize_filename(getattr(collection, "name", None) or f"collection_{collection_id}")
+            thumbnail_path = collections_dir / f"{collection_id}_{safe_name}_thumbnail.jpg"
+
+            source_video = None
+            if getattr(collection, "export_path", None):
+                candidate = Path(collection.export_path)
+                if candidate.exists():
+                    source_video = candidate
+
+            if source_video is None:
+                for clip in getattr(collection, "clips", []) or []:
+                    if getattr(clip, "video_path", None):
+                        candidate = Path(clip.video_path)
+                        if candidate.exists():
+                            source_video = candidate
+                            break
+
+            if source_video is None:
+                raise HTTPException(status_code=404, detail="合集没有可用视频，无法生成封面")
+
+            if not VideoProcessor.extract_thumbnail(source_video, thumbnail_path, time_offset=2):
+                raise HTTPException(status_code=404, detail="合集封面生成失败")
+
+            collection.thumbnail_path = str(thumbnail_path)
+            db.commit()
+
         if not thumbnail_path.exists():
             raise HTTPException(status_code=404, detail="合集封面文件不存在")
         

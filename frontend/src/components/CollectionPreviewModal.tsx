@@ -40,6 +40,8 @@ const CollectionPreviewModal: React.FC<CollectionPreviewModalProps> = ({
   const [currentClipIndex, setCurrentClipIndex] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [playCollectionVideo, setPlayCollectionVideo] = useState(true)
+  const [playedSeconds, setPlayedSeconds] = useState(0)
+  const [playerDuration, setPlayerDuration] = useState(0)
   const autoPlay = true
 
   const [showAddClipModal, setShowAddClipModal] = useState(false)
@@ -68,11 +70,15 @@ const CollectionPreviewModal: React.FC<CollectionPreviewModalProps> = ({
       setCurrentClipIndex(0)
       setPlaying(false)
       setPlayCollectionVideo(true)
+      setPlayedSeconds(0)
+      setPlayerDuration(0)
     }
   }, [visible, latestCollection, collectionClips.length, lastEditTimestamp])
 
   const handleClipSelect = (index: number) => {
     setPlayCollectionVideo(false)
+    setPlayedSeconds(0)
+    setPlayerDuration(0)
     setCurrentClipIndex(index)
     setPlaying(true)
   }
@@ -105,6 +111,22 @@ const CollectionPreviewModal: React.FC<CollectionPreviewModalProps> = ({
     } else {
       setPlaying(false)
     }
+  }
+
+  const formatPlayerTime = (seconds: number) => {
+    const safeSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : 0
+    const mins = Math.floor(safeSeconds / 60)
+    const secs = Math.floor(safeSeconds % 60)
+    return `${mins}:${String(secs).padStart(2, '0')}`
+  }
+
+  const handleProgressSeek = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!playerDuration) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
+    const nextSeconds = ratio * playerDuration
+    playerRef.current?.seekTo(nextSeconds, 'seconds')
+    setPlayedSeconds(nextSeconds)
   }
 
   const handleDragStart = () => {
@@ -323,6 +345,8 @@ const CollectionPreviewModal: React.FC<CollectionPreviewModalProps> = ({
                       onEnded={() => setPlaying(false)}
                       onPlay={() => setPlaying(true)}
                       onPause={() => setPlaying(false)}
+                      onProgress={({ playedSeconds }) => setPlayedSeconds(playedSeconds)}
+                      onDuration={(duration) => setPlayerDuration(duration)}
                       onError={() => {
                         setPlayCollectionVideo(false)
                         setPlaying(false)
@@ -348,6 +372,8 @@ const CollectionPreviewModal: React.FC<CollectionPreviewModalProps> = ({
                       onEnded={handleVideoEnd}
                       onPlay={() => setPlaying(true)}
                       onPause={() => setPlaying(false)}
+                      onProgress={({ playedSeconds }) => setPlayedSeconds(playedSeconds)}
+                      onDuration={(duration) => setPlayerDuration(duration)}
                     />
                   ) : (
                     <div className="empty-video">
@@ -360,6 +386,22 @@ const CollectionPreviewModal: React.FC<CollectionPreviewModalProps> = ({
                 {/* 视频信息栏 - 移到视频下方 */}
                 {(currentClip || latestCollection) && (
                   <div className="video-info-bar">
+                    <div
+                      className="collection-progress"
+                      onClick={handleProgressSeek}
+                      role="slider"
+                      aria-valuemin={0}
+                      aria-valuemax={Math.round(playerDuration || 0)}
+                      aria-valuenow={Math.round(playedSeconds || 0)}
+                      title="点击跳转播放进度"
+                    >
+                      <div
+                        className="collection-progress-fill"
+                        style={{
+                          width: playerDuration ? `${Math.min(100, Math.max(0, (playedSeconds / playerDuration) * 100))}%` : '0%'
+                        }}
+                      />
+                    </div>
                     <div className="video-info-content">
                       <div className="video-title-section">
                         <div className="video-title">
@@ -397,6 +439,9 @@ const CollectionPreviewModal: React.FC<CollectionPreviewModalProps> = ({
                           )}
                           <Text style={{ color: 'var(--ac-muted)', marginLeft: 8 }}>
                             {playCollectionVideo ? `合集视频 · ${collectionClips.length} 个切片` : `${currentClipIndex + 1} / ${collectionClips.length}`}
+                          </Text>
+                          <Text className="ac-mono" style={{ color: 'var(--ac-muted)', marginLeft: 8 }}>
+                            {formatPlayerTime(playedSeconds)} / {formatPlayerTime(playerDuration)}
                           </Text>
                         </div>
                       </div>

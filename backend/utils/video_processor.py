@@ -5,6 +5,7 @@ import subprocess
 import json
 import logging
 import re
+import time
 from typing import List, Dict, Optional
 from pathlib import Path
 from .ffmpeg_utils import get_ffmpeg_path, get_ffprobe_path
@@ -383,7 +384,12 @@ class VideoProcessor:
             output_path = self.clips_dir / f"{clip_id}_{safe_title}.mp4"
             if force:
                 for stale_path in self.clips_dir.glob(f"{clip_id}_*.mp4"):
-                    stale_path.unlink(missing_ok=True)
+                    try:
+                        stale_path.unlink(missing_ok=True)
+                    except PermissionError:
+                        logger.warning("Clip file is in use, keeping stale copy and writing a new version: %s", stale_path)
+                if output_path.exists():
+                    output_path = self.clips_dir / f"{clip_id}_{safe_title}_{int(time.time())}.mp4"
             if output_path.exists() and output_path.stat().st_size > 0 and not force:
                 logger.info(f"Clip {clip_id} already exists, skipping extraction: {output_path}")
                 successful_clips.append(output_path)
@@ -425,7 +431,7 @@ class VideoProcessor:
                 found_clips = list(self.clips_dir.glob(f"{clip_id}_*.mp4"))
                 
                 if found_clips:
-                    found_clip = found_clips[0]  # 取第一个匹配的文件
+                    found_clip = max(found_clips, key=lambda path: path.stat().st_mtime)
                     clips_list.append(found_clip)
                     logger.info(f"找到合集 {collection_id} 的切片: {found_clip.name}")
                 else:

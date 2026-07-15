@@ -47,6 +47,7 @@ const CollectionCard: React.FC<CollectionCardProps> = ({
   }, [collection.project_id, collection.id, collection.created_at])
 
   const [imgError, setImgError] = useState(false)
+  const shouldLoadThumbnail = Boolean(collection.project_id && !imgError)
 
   return (
     <Card
@@ -71,7 +72,7 @@ const CollectionCard: React.FC<CollectionCardProps> = ({
         <div 
           style={{ 
             height: '200px', 
-            background: imgError || !collection.thumbnail_path
+            background: !shouldLoadThumbnail
               ? 'var(--ac-thumb)'
               : 'transparent',
             display: 'flex',
@@ -83,7 +84,7 @@ const CollectionCard: React.FC<CollectionCardProps> = ({
           }}
           onClick={() => onView(collection)}
         >
-          {!imgError && collection.thumbnail_path && (
+          {shouldLoadThumbnail && (
             <img
               src={thumbnailUrl}
               alt={collection.collection_title}

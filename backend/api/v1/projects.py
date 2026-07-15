@@ -23,7 +23,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-UPLOAD_CHUNK_SIZE = 4 * 1024 * 1024
+UPLOAD_CHUNK_SIZE = 2 * 1024 * 1024
 
 
 async def save_upload_file(upload_file: UploadFile, target_path: Path) -> None:

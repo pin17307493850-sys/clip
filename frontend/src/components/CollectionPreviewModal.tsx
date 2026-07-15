@@ -284,7 +284,7 @@ const CollectionPreviewModal: React.FC<CollectionPreviewModalProps> = ({
                 loading={isGenerating}
                 onClick={handleGenerateVideo}
               >
-                导出完整视频
+                下载分开切片
               </Button>
               <Button 
                 type="default" 

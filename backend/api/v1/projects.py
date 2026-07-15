@@ -1368,6 +1368,118 @@ async def download_project_file(
         raise HTTPException(status_code=500, detail=f"下载文件失败: {str(e)}")
 
 
+@router.get("/{project_id}/collections/{collection_id}/download-clips")
+async def download_collection_clips(
+    project_id: str,
+    collection_id: str,
+    db: Session = Depends(get_db),
+    project_service: ProjectService = Depends(get_project_service)
+):
+    """Download every clip in a collection as separate mp4 files inside one zip."""
+    try:
+        from fastapi.responses import FileResponse
+        import urllib.parse
+        import zipfile
+
+        from ...core.path_utils import get_project_directory
+        from ...models.clip import Clip
+        from ...models.collection import Collection, clip_collection
+        from ...utils.video_processor import VideoProcessor
+
+        project = project_service.get(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="项目不存在")
+
+        collection = db.query(Collection).filter(Collection.id == collection_id).first()
+        if not collection:
+            raise HTTPException(status_code=404, detail="合集不存在")
+
+        if str(collection.project_id) != project_id:
+            raise HTTPException(status_code=400, detail="合集不属于指定项目")
+
+        metadata = getattr(collection, "collection_metadata", {}) or {}
+        clip_ids = [str(clip_id) for clip_id in metadata.get("clip_ids", []) if clip_id]
+
+        if not clip_ids:
+            rows = db.execute(
+                clip_collection.select()
+                .where(clip_collection.c.collection_id == collection_id)
+                .order_by(clip_collection.c.order_index.asc())
+            ).fetchall()
+            clip_ids = [str(row.clip_id) for row in rows]
+
+        if not clip_ids:
+            raise HTTPException(status_code=404, detail="合集内没有可下载的切片")
+
+        clips_by_id = {
+            str(clip.id): clip
+            for clip in db.query(Clip).filter(Clip.id.in_(clip_ids), Clip.project_id == project_id).all()
+        }
+        ordered_clips = [clips_by_id[clip_id] for clip_id in clip_ids if clip_id in clips_by_id]
+
+        if not ordered_clips:
+            raise HTTPException(status_code=404, detail="合集内没有找到可下载的切片")
+
+        missing_files = []
+        downloadable_clips = []
+        for clip in ordered_clips:
+            file_path = Path(clip.video_path) if clip.video_path else None
+            if file_path and file_path.exists():
+                downloadable_clips.append((clip, file_path))
+            else:
+                missing_files.append(str(clip.id))
+
+        if not downloadable_clips:
+            raise HTTPException(status_code=404, detail="合集切片视频文件不存在")
+
+        project_dir = get_project_directory(project_id)
+        downloads_dir = project_dir / "output" / "downloads"
+        downloads_dir.mkdir(parents=True, exist_ok=True)
+
+        collection_name = collection.name or f"collection_{collection_id}"
+        safe_collection_name = VideoProcessor.sanitize_filename(collection_name)
+        zip_path = downloads_dir / f"{collection_id}_separate_clips.zip"
+
+        used_names = set()
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as zip_file:
+            for index, (clip, file_path) in enumerate(downloadable_clips, start=1):
+                clip_title = clip.title or f"clip_{clip.id}"
+                safe_clip_title = VideoProcessor.sanitize_filename(clip_title)[:80] or f"clip_{index}"
+                arcname = f"{index:02d}_{safe_clip_title}.mp4"
+                suffix = 2
+                while arcname.lower() in used_names:
+                    arcname = f"{index:02d}_{safe_clip_title}_{suffix}.mp4"
+                    suffix += 1
+                used_names.add(arcname.lower())
+                zip_file.write(file_path, arcname)
+
+            if missing_files:
+                zip_file.writestr(
+                    "missing_clips.txt",
+                    "The following clip files were not found and were skipped:\n"
+                    + "\n".join(missing_files)
+                    + "\n"
+                )
+
+        filename = f"{safe_collection_name}_分开切片.zip"
+        encoded_filename = urllib.parse.quote(filename.encode("utf-8"))
+
+        return FileResponse(
+            path=str(zip_path),
+            filename=filename,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"下载合集切片包失败: {e}")
+        raise HTTPException(status_code=500, detail=f"下载合集切片包失败: {str(e)}")
+
+
 @router.get("/{project_id}/collections/{collection_id}/thumbnail")
 async def get_collection_thumbnail(
     project_id: str,

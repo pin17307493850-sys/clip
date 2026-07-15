@@ -468,6 +468,58 @@ export const projectApi = {
     return api.post(`/projects/${projectId}/collections/${collectionId}/generate`)
   },
 
+  downloadCollectionClips: async (projectId: string, collectionId: string) => {
+    try {
+      const response = await axios.get(`/api/v1/projects/${projectId}/collections/${collectionId}/download-clips`, {
+        responseType: 'blob',
+        headers: {
+          'Accept': 'application/zip'
+        }
+      })
+
+      const contentDisposition = response.headers['content-disposition']
+      let filename = `collection_${collectionId}_clips.zip`
+
+      if (contentDisposition) {
+        const filenameStarMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/)
+        if (filenameStarMatch) {
+          filename = decodeURIComponent(filenameStarMatch[1])
+        } else {
+          const filenameMatch = contentDisposition.match(/filename="([^"]+)"/)
+          if (filenameMatch) {
+            filename = filenameMatch[1]
+          }
+        }
+      }
+
+      const blob = new Blob([response.data], { type: 'application/zip' })
+      const downloadUrl = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = downloadUrl
+      link.download = filename
+
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(downloadUrl)
+
+      trackClipsExported({
+        clipCount: 1,
+        exportType: 'collection',
+      })
+
+      return response.data
+    } catch (error: any) {
+      console.error('下载合集切片失败:', error)
+      trackProcessingFailed({
+        stage: 'export',
+        message: error?.message,
+        code: error?.response?.status,
+      })
+      throw error
+    }
+  },
+
   downloadVideo: async (projectId: string, clipId?: string, collectionId?: string) => {
     let url = `/projects/${projectId}/download`
     if (clipId) {

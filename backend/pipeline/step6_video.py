@@ -11,6 +11,7 @@ from pathlib import Path
 
 # 导入依赖
 from ..utils.video_processor import VideoProcessor
+from .clip_dedup import dedupe_clips_by_time
 from ..utils.text_processor import TextProcessor
 from ..utils.ffmpeg_utils import get_ffmpeg_path
 from ..core.shared_config import METADATA_DIR, CLIPS_DIR, COLLECTIONS_DIR
@@ -159,6 +160,7 @@ class VideoGenerator:
         Returns:
             生成的切片视频路径列表
         """
+        clips_with_titles = dedupe_clips_by_time(clips_with_titles, "step6_video_input")
         logger.info("开始生成切片视频...")
         
         video_info = self.video_processor.get_video_info(input_video)

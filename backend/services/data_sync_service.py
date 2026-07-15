@@ -210,6 +210,14 @@ class DataSyncService:
                 logger.warning(f"项目 {project_id} 切片数据格式不正确")
                 return 0
             
+            try:
+                from ..pipeline.clip_dedup import dedupe_clips_by_time, expand_long_clips_from_advice
+
+                clips_data = expand_long_clips_from_advice(clips_data, "data_sync_clips")
+                clips_data = dedupe_clips_by_time(clips_data, "data_sync_clips")
+            except Exception as dedupe_error:
+                logger.warning(f"鍒囩墖鍘婚噸/闀挎鎷嗗垎澶辫触锛屽皢缁х画鍚屾鍘熷鏁版嵁: {dedupe_error}")
+
             synced_count = 0
             updated_count = 0
             for clip_data in clips_data:

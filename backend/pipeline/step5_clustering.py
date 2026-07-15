@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from ..core.shared_config import MAX_CLIPS_PER_COLLECTION, METADATA_DIR, PROMPT_FILES
 from ..utils.llm_client import LLMClient
+from .clip_dedup import dedupe_clips_by_time
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +279,7 @@ def run_step5_clustering(
 ) -> List[Dict]:
     with open(clips_with_titles_path, "r", encoding="utf-8") as f:
         clips_with_titles = json.load(f)
+    clips_with_titles = dedupe_clips_by_time(clips_with_titles, "step5_clustering_input")
 
     metadata_path = Path(metadata_dir) if metadata_dir is not None else METADATA_DIR
     clusterer = ClusteringEngine(metadata_dir=metadata_path, prompt_files=prompt_files)

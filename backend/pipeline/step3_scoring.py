@@ -15,6 +15,7 @@ from typing import Any, Callable, Dict, List, Optional
 from ..core.shared_config import METADATA_DIR, MIN_SCORE_THRESHOLD, PROMPT_FILES
 from ..utils.llm_client import LLMClient
 from ..utils.text_processor import TextProcessor
+from .clip_dedup import dedupe_clips_by_time, expand_long_clips_from_advice
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,78 @@ def _looks_like_product_clip(clip: Dict[str, Any]) -> bool:
         "下单", "库存", "入口", "风味", "香气", "搭配", "复购",
     )
     return any(word in text for word in product_words)
+
+
+def _product_key(clip: Dict[str, Any]) -> str:
+    product = str(clip.get("product") or clip.get("product_name") or "").strip()
+    if product:
+        return product[:40]
+    title_text = " ".join(
+        str(clip.get(key) or "")
+        for key in ("generated_title", "title", "outline", "selling_point")
+    ).strip()
+    return title_text[:40]
+
+
+def _is_duplicate_rejection(clip: Dict[str, Any]) -> bool:
+    text = " ".join(
+        str(clip.get(key) or "")
+        for key in ("recommend_reason", "duration_advice", "cut_reason")
+    )
+    duplicate_words = ("完全重复", "重复", "同id", "同 ID", "duplicate")
+    return any(word in text for word in duplicate_words)
+
+
+def _is_product_coverage_candidate(clip: Dict[str, Any]) -> bool:
+    if _is_duplicate_rejection(clip):
+        return False
+    product = str(clip.get("product") or clip.get("product_name") or "").strip()
+    content = str(clip.get("content") or "")
+    selling_point = str(clip.get("selling_point") or clip.get("outline") or "")
+    if not product and not _looks_like_product_clip(clip):
+        return False
+    duration = ClipScorer._duration_seconds_static(clip)
+    if duration < 8 or duration > 110:
+        return False
+    if len(content) + len(selling_point) < 18:
+        return False
+    return True
+
+
+def _apply_product_coverage_guard(scored_clips: List[Dict], high_score_clips: List[Dict]) -> List[Dict]:
+    """Ensure each clear product has at least one usable clip candidate."""
+    selected = list(high_score_clips)
+    selected_products = {_product_key(clip) for clip in selected if _product_key(clip)}
+
+    best_by_product: Dict[str, Dict] = {}
+    for clip in scored_clips:
+        product = _product_key(clip)
+        if not product or product in selected_products:
+            continue
+        if not _is_product_coverage_candidate(clip):
+            continue
+        existing = best_by_product.get(product)
+        if existing is None:
+            best_by_product[product] = clip
+            continue
+        current_score = float(clip.get("final_score", 0) or 0)
+        existing_score = float(existing.get("final_score", 0) or 0)
+        current_duration = ClipScorer._duration_seconds_static(clip)
+        existing_duration = ClipScorer._duration_seconds_static(existing)
+        if (current_score, -abs(current_duration - 35)) > (existing_score, -abs(existing_duration - 35)):
+            best_by_product[product] = clip
+
+    for clip in best_by_product.values():
+        original_score = float(clip.get("final_score", 0) or 0)
+        clip["keep_reason"] = "product_coverage_guard"
+        clip["final_score"] = max(original_score, 0.66)
+        if not clip.get("recommend_reason"):
+            clip["recommend_reason"] = "产品覆盖兜底：该产品没有其他高分切片，但此片段包含可用产品介绍信息。"
+        selected.append(clip)
+
+    if best_by_product:
+        logger.info("Product coverage guard recovered %s product clips", len(best_by_product))
+    return selected
 
 
 class ClipScorer:
@@ -199,6 +272,10 @@ class ClipScorer:
         return clip
 
     def _duration_seconds(self, clip: Dict) -> float:
+        return self._duration_seconds_static(clip)
+
+    @staticmethod
+    def _duration_seconds_static(clip: Dict) -> float:
         def parse_time(value: Any) -> Optional[float]:
             if not value:
                 return None
@@ -258,6 +335,9 @@ def run_step3_scoring(
             clip["keep_reason"] = "product_coverage_guard"
             clip["final_score"] = max(score, 0.65)
             high_score_clips.append(clip)
+    high_score_clips = _apply_product_coverage_guard(scored_clips, high_score_clips)
+    high_score_clips = expand_long_clips_from_advice(high_score_clips, "step3_high_score_clips")
+    high_score_clips = dedupe_clips_by_time(high_score_clips, "step3_high_score_clips")
 
     all_scored_path = metadata_dir / "step3_all_scored.json"
     scorer.save_scores(scored_clips, all_scored_path)

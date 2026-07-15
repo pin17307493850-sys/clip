@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional
 from ..core.shared_config import METADATA_DIR, PROMPT_FILES
 from ..utils.llm_client import LLMClient
 from ..utils.text_processor import TextProcessor
+from .clip_dedup import dedupe_clips_by_time, expand_long_clips_from_advice
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +204,8 @@ def normalize_clip_titles(clips_with_titles: List[Dict]) -> List[Dict]:
     """Apply product-first titles to cached title checkpoints."""
     normalizer = TitleGenerator.__new__(TitleGenerator)
     changed = []
-    for clip in clips_with_titles:
+    normalized_input = expand_long_clips_from_advice(clips_with_titles, "step4_titles")
+    for clip in dedupe_clips_by_time(normalized_input, "step4_titles"):
         title = clip.get("generated_title") or clip.get("title") or ""
         normalized = normalizer._product_first_title(clip, title) if title else normalizer._fallback_title(clip)
         clip["generated_title"] = normalized

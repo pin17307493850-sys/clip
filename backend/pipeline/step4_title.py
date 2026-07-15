@@ -6,6 +6,7 @@ the pipeline falls back to a readable local title so video export can continue.
 """
 import json
 import logging
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -46,6 +47,23 @@ def _product_name_from_clip(clip: Dict[str, Any]) -> str:
     return ""
 
 
+def _clip_id_sort_key(clip: Dict[str, Any]) -> tuple:
+    raw_id = str(clip.get("id", "0"))
+    key = []
+    for part in raw_id.split("-"):
+        if part.isdigit():
+            key.append((0, int(part)))
+            continue
+        match = re.match(r"^(\d+)(.*)$", part)
+        if match:
+            key.append((0, int(match.group(1))))
+            if match.group(2):
+                key.append((1, match.group(2)))
+        else:
+            key.append((1, part))
+    return tuple(key)
+
+
 class TitleGenerator:
     """Generate or fallback titles for scored clips."""
 
@@ -83,7 +101,7 @@ class TitleGenerator:
         titled: List[Dict] = []
 
         for chunk_index, chunk_clips in clips_by_chunk.items():
-            chunk_clips = sorted(chunk_clips, key=lambda x: int(x.get("id", 0)))
+            chunk_clips = sorted(chunk_clips, key=_clip_id_sort_key)
             for batch_index, start in enumerate(range(0, len(chunk_clips), 5), start=1):
                 batch = chunk_clips[start : start + 5]
                 completed_batches += 1
@@ -97,7 +115,7 @@ class TitleGenerator:
                 titled.extend(titled_batch)
                 self._save_partial(titled)
 
-        titled.sort(key=lambda x: int(x.get("id", 0)))
+        titled.sort(key=_clip_id_sort_key)
         logger.info("Finished title generation for %s clips", len(titled))
         return titled
 

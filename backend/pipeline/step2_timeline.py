@@ -169,6 +169,11 @@ class TimelineExtractor:
                                     chunk_outlines,
                                     srt_chunk_data,
                                 )
+                                parsed_items = self._add_product_prelude_clips(
+                                    parsed_items,
+                                    chunk_outlines,
+                                    srt_chunk_data,
+                                )
                                 # 保存解析后的结果
                                 with open(chunk_output_path, 'w', encoding='utf-8') as f:
                                     json.dump(parsed_items, f, ensure_ascii=False, indent=2)
@@ -272,6 +277,11 @@ class TimelineExtractor:
                         batch_outlines,
                         srt_chunk_data,
                     )
+                    parsed_items = self._add_product_prelude_clips(
+                        parsed_items,
+                        batch_outlines,
+                        srt_chunk_data,
+                    )
                     chunk_items.extend(parsed_items)
                     self._save_partial_chunk(chunk_index, chunk_items)
                 self._emit_timeline_progress(batch_number, total_batches, "已读取时间线缓存")
@@ -326,6 +336,11 @@ class TimelineExtractor:
 
                     if parsed_items:
                         parsed_items = self._apply_product_completion_guard(
+                            parsed_items,
+                            batch_outlines,
+                            srt_chunk_data,
+                        )
+                        parsed_items = self._add_product_prelude_clips(
                             parsed_items,
                             batch_outlines,
                             srt_chunk_data,
@@ -534,6 +549,208 @@ class TimelineExtractor:
             adjusted_items.append(adjusted)
 
         return adjusted_items
+
+    def _add_product_prelude_clips(
+        self,
+        parsed_items: List[Dict],
+        outlines: List[Dict],
+        srt_chunk_data: List[Dict],
+    ) -> List[Dict]:
+        """Recover early product-intro segments that the model may skip.
+
+        Product livestreams often introduce packaging, colors, design, origin,
+        or craft before the later price/gift pitch. If the model only selects
+        the later pitch, keep the earlier product explanation as a separate
+        clip instead of merging through noisy interaction.
+        """
+        if not parsed_items or not outlines or not srt_chunk_data:
+            return parsed_items
+
+        def text_of(value: Any) -> str:
+            if value is None:
+                return ""
+            if isinstance(value, (list, tuple)):
+                return " ".join(text_of(item) for item in value)
+            if isinstance(value, dict):
+                return " ".join(text_of(item) for item in value.values())
+            return str(value)
+
+        def seconds(value: Any) -> Optional[float]:
+            if not value:
+                return None
+            try:
+                return self.text_processor.time_to_seconds(self._convert_time_format(str(value)))
+            except Exception:
+                return None
+
+        def srt_time(value: float) -> str:
+            value = max(0.0, float(value))
+            whole = int(value)
+            milliseconds = int(round((value - whole) * 1000))
+            if milliseconds >= 1000:
+                whole += 1
+                milliseconds -= 1000
+            hours = whole // 3600
+            minutes = (whole % 3600) // 60
+            secs = whole % 60
+            return f"{hours:02d}:{minutes:02d}:{secs:02d},{milliseconds:03d}"
+
+        def product_aliases(product: str) -> List[str]:
+            compact = re.sub(r"[\\s（）()·・\\-_/]+", "", product or "")
+            compact = re.sub(r"[（(].*?[）)]", "", compact)
+            aliases = {compact}
+            aliases.add(compact.replace("的", ""))
+            for suffix in ("礼盒", "套装", "组合", "茶", "花茶", "乌龙茶", "果茶", "耳钉", "项链", "手链", "茶宠", "首饰盒"):
+                if compact.endswith(suffix) and len(compact) > len(suffix) + 1:
+                    root = compact[: -len(suffix)]
+                    aliases.add(root)
+                    aliases.add(f"{root}的{suffix}")
+            for sep in ("（", "(", "·", "-", "_", "/"):
+                if sep in product:
+                    head = product.split(sep, 1)[0].strip()
+                    if len(head) >= 2:
+                        aliases.add(head)
+            return [alias for alias in aliases if len(alias) >= 2]
+
+        def product_matches(product: str, text: str) -> bool:
+            compact_text = re.sub(r"[\\s（）()·・\\-_/]+", "", text or "")
+            return any(alias and alias in compact_text for alias in product_aliases(product))
+
+        setup_words = (
+            "介绍", "包装", "颜色", "设计", "原创", "插画", "礼盒", "套装", "材质", "工艺",
+            "进口", "冻干", "原料", "配料", "成分", "里面", "外面", "口味", "味道", "香",
+            "适合", "风味", "限定", "高级", "好看", "特点", "卖点", "核心", "重点", "产品",
+        )
+        interaction_words = (
+            "吗", "可以的", "要不", "备注", "拍下", "上车", "送你", "给你送", "小助理",
+            "链接", "库存", "还有没有", "能不能", "换", "退", "订单",
+        )
+
+        subtitles = []
+        for sub in srt_chunk_data:
+            start = seconds(sub.get("start_time"))
+            end = seconds(sub.get("end_time"))
+            text = str(sub.get("text") or "").strip()
+            if start is None or end is None or not text:
+                continue
+            subtitles.append((start, end, text))
+
+        if not subtitles:
+            return parsed_items
+
+        outline_by_product: Dict[str, Dict] = {}
+        for outline in outlines:
+            product = str(outline.get("product") or "").strip()
+            if product:
+                outline_by_product[product] = outline
+
+        existing_ranges = []
+        for item in parsed_items:
+            start = seconds(item.get("start_time"))
+            end = seconds(item.get("end_time"))
+            product = str(item.get("product") or "").strip()
+            if start is not None and end is not None:
+                existing_ranges.append((product, start, end))
+
+        additions: List[Dict] = []
+        for item in parsed_items:
+            product = str(item.get("product") or "").strip()
+            if not product:
+                continue
+
+            item_start = seconds(item.get("start_time"))
+            if item_start is None or item_start < 20:
+                continue
+
+            outline = outline_by_product.get(product)
+            outline_start = seconds(outline.get("start_time")) if outline else None
+            window_end = item_start - 8
+            window_start = max(0.0, min(value for value in (item_start, outline_start or item_start) if value is not None) - 180)
+            candidates = [
+                (start, end, text)
+                for start, end, text in subtitles
+                if start >= window_start and end <= window_end
+            ]
+            if not candidates:
+                continue
+
+            best_segment = None
+            current = None
+            for start, end, text in candidates:
+                product_hit = product_matches(product, text)
+                setup_hit = any(word in text for word in setup_words)
+                if product_hit and current is None:
+                    current = [start, end, [text], 1]
+                    continue
+                if current is None:
+                    continue
+
+                gap = start - current[1]
+                has_setup = setup_hit
+                has_interaction = any(word in text for word in interaction_words)
+                duration = current[1] - current[0]
+
+                if gap <= 6 and (has_setup or product_hit or (not has_interaction and duration < 45)):
+                    current[1] = end
+                    current[2].append(text)
+                    if product_hit or has_setup:
+                        current[3] += 1
+                    continue
+
+                if has_interaction and duration >= 15:
+                    pass
+                elif gap <= 10 and duration < 18:
+                    current[1] = end
+                    current[2].append(text)
+                    continue
+
+                if current and current[1] - current[0] >= 15 and current[3] >= 2:
+                    best_segment = current
+                current = [start, end, [text], 1] if product_hit else None
+
+            if current and current[1] - current[0] >= 15 and current[3] >= 2:
+                best_segment = current
+
+            if not best_segment:
+                continue
+
+            start, end, lines, evidence_count = best_segment
+            if end >= item_start - 5 or end - start < 15 or len("".join(lines)) < 40 or evidence_count < 2:
+                continue
+            overlaps_existing = any(
+                product == existing_product and start < existing_end and end > existing_start
+                for existing_product, existing_start, existing_end in existing_ranges
+            )
+            if overlaps_existing:
+                continue
+
+            prelude = dict(item)
+            prelude["id"] = f"{item.get('id', '0')}-0"
+            prelude["start_time"] = srt_time(start)
+            prelude["end_time"] = srt_time(end)
+            prelude["duration"] = round(end - start, 2)
+            prelude["duration_seconds"] = round(end - start, 2)
+            prelude["content"] = " ".join(lines)
+            prelude["outline"] = f"{product} 包装/设计/工艺介绍"
+            prelude["selling_point"] = "产品前置介绍：包装、颜色、设计、工艺或基础卖点"
+            prelude["recommend_reason"] = "字幕中存在连续的产品基础介绍，适合作为独立产品介绍切片。"
+            prelude["cut_reason"] = "产品前置介绍兜底：主切片前存在连续包装、颜色、设计、工艺等产品说明，已独立保留。"
+            prelude["product_prelude_guard"] = True
+            additions.append(prelude)
+            existing_ranges.append((product, start, end))
+            logger.info(
+                "Product prelude guard added %s from %s to %s",
+                product,
+                prelude["start_time"],
+                prelude["end_time"],
+            )
+
+        if not additions:
+            return parsed_items
+
+        combined = parsed_items + additions
+        combined.sort(key=lambda clip: seconds(clip.get("start_time")) or 0)
+        return combined
 
     def _save_partial_chunk(self, chunk_index: int, chunk_items: List[Dict]) -> None:
         if not chunk_items:

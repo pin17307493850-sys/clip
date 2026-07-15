@@ -50,7 +50,13 @@ class DataSyncService:
                         failed_projects.append({"project_id": project_id, "error": str(e)})
             
             logger.info(f"同步完成: 成功 {len(synced_projects)} 个, 失败 {len(failed_projects)} 个")
-            
+            project = self.db.query(Project).filter(Project.id == project_id).first()
+            if project and (clips_count or collections_count):
+                project.status = ProjectStatus.COMPLETED
+                project.completed_at = project.completed_at or datetime.utcnow()
+                project.updated_at = datetime.utcnow()
+                self.db.commit()
+
             return {
                 "success": True,
                 "synced_projects": synced_projects,

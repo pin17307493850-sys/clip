@@ -39,8 +39,8 @@ def _seconds_to_srt_time(seconds: float) -> str:
 
 def _clip_time_range(clip: Clip) -> tuple[float, float]:
     metadata = getattr(clip, "clip_metadata", None) or {}
-    start_value = metadata.get("start_time")
-    end_value = metadata.get("end_time")
+    start_value = metadata.get("export_start_time") or metadata.get("start_time")
+    end_value = metadata.get("export_end_time") or metadata.get("end_time")
     try:
         if start_value and end_value:
             start = TextProcessor.time_to_seconds(str(start_value))

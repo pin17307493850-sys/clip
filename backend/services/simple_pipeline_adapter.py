@@ -325,7 +325,7 @@ class SimplePipelineAdapter:
                     clips_dir=str(clips_output_dir),
                     collections_dir=str(collections_output_dir),
                     metadata_dir=str(metadata_dir),
-                    burn_subtitles=(video_category == "product_intro_short"),
+                    burn_subtitles=False,
                     generate_collections=False,
                     progress_callback=lambda stage, message, subpercent=20: emit_progress(
                         self.project_id,

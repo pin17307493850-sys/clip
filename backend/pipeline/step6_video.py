@@ -19,7 +19,7 @@ from ..core.shared_config import METADATA_DIR, CLIPS_DIR, COLLECTIONS_DIR
 logger = logging.getLogger(__name__)
 
 ProgressCallback = Optional[Callable[[str, str, int], None]]
-CLIP_PADDING_SECONDS = 2.0
+CLIP_PADDING_SECONDS = 3.0
 
 
 def _seconds_to_srt_time(seconds: float) -> str:
@@ -148,6 +148,19 @@ class VideoGenerator:
         
         # 创建VideoProcessor实例，强制使用项目内路径
         self.video_processor = VideoProcessor(clips_dir=str(self.clips_dir), collections_dir=str(self.collections_dir))
+
+    def clear_previous_outputs(self) -> None:
+        """Remove stale generated media before re-exporting this project."""
+        for output_dir in (self.clips_dir, self.collections_dir):
+            output_dir.mkdir(parents=True, exist_ok=True)
+            for path in output_dir.iterdir():
+                try:
+                    if path.is_file() or path.is_symlink():
+                        path.unlink()
+                    elif path.is_dir():
+                        shutil.rmtree(path)
+                except Exception as exc:
+                    logger.warning("Failed to remove stale output %s: %s", path, exc)
     
     def generate_clips(self, clips_with_titles: List[Dict], input_video: Path) -> List[Path]:
         """
@@ -300,18 +313,23 @@ def run_step6_video(clips_with_titles_path: Path, collections_path: Path,
     
     # 创建视频生成器
     generator = VideoGenerator(clips_dir=clips_dir, collections_dir=collections_dir, metadata_dir=metadata_dir)
+    generator.clear_previous_outputs()
     
     # 生成切片视频
     if progress_callback:
         progress_callback("EXPORT", f"正在导出切片视频 0/{len(clips_with_titles)}", 20)
     successful_clips = generator.generate_clips(clips_with_titles, input_video)
+    clip_paths_by_id = {path.name.split("_", 1)[0]: path for path in successful_clips}
+    for clip in clips_with_titles:
+        clip_path = clip_paths_by_id.get(str(clip.get("id")))
+        if clip_path:
+            clip["video_path"] = str(clip_path)
     if progress_callback:
         progress_callback("EXPORT", f"切片视频导出完成 {len(successful_clips)}/{len(clips_with_titles)}", 45)
 
     if burn_subtitles and metadata_dir:
         source_srt = Path(metadata_dir) / "input.srt"
         if source_srt.exists():
-            clip_paths_by_id = {path.name.split("_", 1)[0]: path for path in successful_clips}
             subtitle_work_dir = Path(metadata_dir) / "burned_clip_subtitles"
             burned_count = 0
             total_to_burn = len(clips_with_titles)
@@ -343,10 +361,13 @@ def run_step6_video(clips_with_titles_path: Path, collections_path: Path,
     if metadata_dir:
         project_metadata_dir = Path(metadata_dir)
         generator.save_clip_metadata(clips_with_titles, project_metadata_dir / "clips_metadata.json")
-        generator.save_collection_metadata(collections_data, project_metadata_dir / "collections_metadata.json")
+        generator.save_collection_metadata(
+            successful_collections or collections_data,
+            project_metadata_dir / "collections_metadata.json",
+        )
     else:
         generator.save_clip_metadata(clips_with_titles)
-        generator.save_collection_metadata(collections_data)
+        generator.save_collection_metadata(successful_collections or collections_data)
     
     # 返回结果信息
     result = {

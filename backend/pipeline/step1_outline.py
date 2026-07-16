@@ -3,6 +3,7 @@ Step 1: 大纲提取 - 从转写文本中提取结构性大纲
 """
 import json
 import logging
+import os
 import re
 from typing import List, Dict, Any, Optional
 from pathlib import Path
@@ -14,6 +15,15 @@ from ..core.shared_config import PROMPT_FILES, METADATA_DIR
 from .parallel_llm import get_llm_concurrency, run_parallel_ordered
 
 logger = logging.getLogger(__name__)
+
+
+def _outline_chunk_minutes() -> int:
+    """Keep each LLM request small enough to cover the entire live stream."""
+    try:
+        value = int(os.getenv("AUTOCLIP_OUTLINE_CHUNK_MINUTES", "5"))
+    except (TypeError, ValueError):
+        value = 5
+    return max(2, min(value, 10))
 
 class OutlineExtractor:
     """大纲提取器（重构版）"""
@@ -65,8 +75,9 @@ class OutlineExtractor:
             return []
             
         # 2. 基于时间智能分块
-        chunks = self.text_processor.chunk_srt_data(srt_data, interval_minutes=30)
-        logger.info(f"文本已按~30分钟/块切分，共{len(chunks)}个块")
+        chunk_minutes = _outline_chunk_minutes()
+        chunks = self.text_processor.chunk_srt_data(srt_data, interval_minutes=chunk_minutes)
+        logger.info(f"文本已按~{chunk_minutes}分钟/块切分，共{len(chunks)}个块")
         
         # 3. 保存文本块和SRT块到中间文件
         chunk_files = self._save_chunks_to_files(chunks)
@@ -111,7 +122,13 @@ class OutlineExtractor:
         chunk_files = []
         for chunk in chunks:
             chunk_index = chunk['chunk_index']
-            text_content = chunk['text']
+            # The prompt asks for precise absolute times. Preserve the SRT
+            # timestamps instead of sending plain text and forcing the model
+            # to guess every location from a long transcript.
+            text_content = "\n\n".join(
+                f"{entry['index']}\n{entry['start_time']} --> {entry['end_time']}\n{entry['text']}"
+                for entry in chunk['srt_entries']
+            )
             file_path = self.chunks_dir / f"chunk_{chunk_index}.txt"
             
             with open(file_path, 'w', encoding='utf-8') as f:
@@ -230,13 +247,19 @@ class OutlineExtractor:
     
     def _merge_outlines(self, outlines: List[Dict]) -> List[Dict]:
         """
-        合并和去重大纲，保留最先出现的版本
+        只删除同一字幕块、同一时间段内的完全重复大纲。
+
+        同一个产品可能在直播后半段再次讲包装、口味或价格，不能仅按
+        标题去重，否则后面的有效候选会被前面同名候选覆盖。
         """
         unique_outlines = {}
         for outline in outlines:
-            title = outline['title']
-            if title not in unique_outlines:
-                unique_outlines[title] = outline
+            title = " ".join(str(outline.get('title') or '').split()).lower()
+            start_time = str(outline.get('start_time') or '')
+            end_time = str(outline.get('end_time') or '')
+            key = (outline.get('chunk_index'), title, start_time, end_time)
+            if key not in unique_outlines:
+                unique_outlines[key] = outline
         return list(unique_outlines.values())
     
     def save_outline(self, outlines: List[Dict], output_path: Optional[Path] = None) -> Path:

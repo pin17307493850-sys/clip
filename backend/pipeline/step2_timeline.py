@@ -12,7 +12,7 @@ from collections import defaultdict
 from ..utils.llm_client import LLMClient
 from ..utils.text_processor import TextProcessor
 from ..core.shared_config import PROMPT_FILES, METADATA_DIR
-from .clip_dedup import dedupe_clips_by_time
+from .clip_dedup import dedupe_clips_by_time, merge_cross_chunk_product_clips
 from .product_clip_logic import enrich_product_logic_clips
 from .parallel_llm import get_llm_concurrency, run_parallel_ordered
 
@@ -225,6 +225,7 @@ class TimelineExtractor:
             self.srt_chunks_dir,
             self.text_processor,
         )
+        all_timeline_data = merge_cross_chunk_product_clips(all_timeline_data)
         all_timeline_data = dedupe_clips_by_time(all_timeline_data, "step2_timeline")
         
         # 最终排序：在返回所有结果前，按开始时间进行全局排序
@@ -295,7 +296,13 @@ class TimelineExtractor:
                         srt_chunk_data,
                     )
                     return parsed_items
-                return []
+                return self._fallback_timeline_from_outlines(
+                    batch_outlines,
+                    srt_chunk_data,
+                    chunk_index,
+                    chunk_start_time,
+                    chunk_end_time,
+                )
 
             llm_input_outlines = [
                 {
@@ -397,7 +404,13 @@ class TimelineExtractor:
                             f"batch_{batch_index}_parse_exception"
                         )
                     continue
-            return []
+            return self._fallback_timeline_from_outlines(
+                batch_outlines,
+                srt_chunk_data,
+                chunk_index,
+                chunk_start_time,
+                chunk_end_time,
+            )
 
         logger.info(
             "Step2 chunk %s using bounded LLM concurrency=%s for %s batches",
@@ -417,6 +430,91 @@ class TimelineExtractor:
         chunk_items = [item for batch in batch_results for item in batch]
         self._save_partial_chunk(chunk_index, chunk_items)
         return chunk_items
+
+    def _fallback_timeline_from_outlines(
+        self,
+        outlines: List[Dict],
+        srt_chunk_data: List[Dict],
+        chunk_index: int,
+        chunk_start_time: str,
+        chunk_end_time: str,
+    ) -> List[Dict]:
+        """Keep valid Step1 ranges when a Step2 response cannot be parsed."""
+        def srt_time(value: float) -> str:
+            value = max(0.0, float(value))
+            whole = int(value)
+            milliseconds = int(round((value - whole) * 1000))
+            if milliseconds == 1000:
+                whole += 1
+                milliseconds = 0
+            hours, remainder = divmod(whole, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
+
+        try:
+            chunk_start_seconds = self.text_processor.time_to_seconds(chunk_start_time)
+            chunk_end_seconds = self.text_processor.time_to_seconds(chunk_end_time)
+        except Exception:
+            return []
+
+        fallback_items: List[Dict] = []
+        for outline in outlines:
+            start_value = outline.get("start_time")
+            end_value = outline.get("end_time")
+            if not start_value or not end_value:
+                continue
+            try:
+                start_time = self._convert_time_format(str(start_value))
+                end_time = self._convert_time_format(str(end_value))
+                start_seconds = max(
+                    chunk_start_seconds,
+                    self.text_processor.time_to_seconds(start_time),
+                )
+                end_seconds = min(
+                    chunk_end_seconds,
+                    self.text_processor.time_to_seconds(end_time),
+                )
+            except Exception:
+                continue
+            if end_seconds <= start_seconds:
+                continue
+
+            start_time = srt_time(start_seconds)
+            end_time = srt_time(end_seconds)
+
+            content_lines = []
+            for subtitle in srt_chunk_data:
+                try:
+                    subtitle_start = self.text_processor.time_to_seconds(subtitle["start_time"])
+                    subtitle_end = self.text_processor.time_to_seconds(subtitle["end_time"])
+                except Exception:
+                    continue
+                if subtitle_start <= end_seconds and subtitle_end >= start_seconds:
+                    text = str(subtitle.get("text") or "").strip()
+                    if text:
+                        content_lines.append(text)
+
+            fallback_item = {
+                "outline": outline.get("title") or outline.get("topic") or outline.get("product") or "产品介绍",
+                "product": outline.get("product"),
+                "summary": outline.get("summary"),
+                "reason": outline.get("reason"),
+                "start_time": start_time,
+                "end_time": end_time,
+                "content": " ".join(content_lines),
+                "chunk_index": chunk_index,
+                "timeline_source": "outline_fallback",
+                "cut_reason": "时间线模型响应解析失败，使用带时间戳大纲保留该产品候选。",
+            }
+            fallback_items.append(fallback_item)
+            logger.warning(
+                "Step2 fallback kept outline range: %s (%s -> %s)",
+                fallback_item["outline"],
+                start_time,
+                end_time,
+            )
+
+        return fallback_items
 
     def _apply_product_completion_guard(
         self,

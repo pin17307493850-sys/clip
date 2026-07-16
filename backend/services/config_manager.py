@@ -55,7 +55,12 @@ class ProjectConfigManager:
     
     def __init__(self, project_id: str):
         self.project_id = project_id
-        self.project_dir = Path(f"data/projects/{project_id}")
+        project_path = Path(project_id)
+        self.project_dir = (
+            project_path
+            if project_path.is_absolute()
+            else Path("data") / "projects" / project_path
+        )
         self.config_path = self.project_dir / "config.yaml"
         # 使用绝对路径指向项目根目录的prompt文件夹
         project_root = Path(__file__).parent.parent.parent

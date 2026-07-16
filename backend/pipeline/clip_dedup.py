@@ -257,6 +257,93 @@ def dedupe_clips_by_time(clips: List[Dict[str, Any]], source: str = "clips") -> 
     return deduped
 
 
+def merge_cross_chunk_product_clips(
+    clips: List[Dict[str, Any]],
+    max_gap_seconds: float = 12.0,
+    max_duration_seconds: float = 95.0,
+) -> List[Dict[str, Any]]:
+    """Join one logical product section split only by an analysis boundary.
+
+    Different selling-point aspects remain separate, as do long sections that
+    should naturally be edited into multiple short videos.
+    """
+    if not clips:
+        return []
+
+    ordered = sorted(
+        (deepcopy(clip) for clip in clips),
+        key=lambda item: (
+            _time_to_seconds(item.get("start_time")) or 0,
+            _time_to_seconds(item.get("end_time")) or 0,
+        ),
+    )
+    merged: List[Dict[str, Any]] = []
+
+    for clip in ordered:
+        if not merged:
+            merged.append(clip)
+            continue
+
+        previous = merged[-1]
+        previous_range = _clip_range(previous)
+        current_range = _clip_range(clip)
+        try:
+            previous_chunk = int(previous.get("chunk_index"))
+            current_chunk = int(clip.get("chunk_index"))
+        except (TypeError, ValueError):
+            previous_chunk = current_chunk = -100
+
+        should_merge = False
+        if previous_range and current_range and current_chunk == previous_chunk + 1:
+            previous_start, previous_end = previous_range
+            current_start, current_end = current_range
+            gap = current_start - previous_end
+            combined_duration = max(previous_end, current_end) - min(previous_start, current_start)
+            previous_product = _compact_text(previous.get("product") or previous.get("product_name"))
+            current_product = _compact_text(clip.get("product") or clip.get("product_name"))
+            previous_aspect = _aspect_key(previous)
+            current_aspect = _aspect_key(clip)
+            same_logic = (
+                previous_aspect == current_aspect
+                or previous_aspect == "general"
+                or current_aspect == "general"
+            )
+            should_merge = (
+                -max_gap_seconds <= gap <= max_gap_seconds
+                and combined_duration <= max_duration_seconds
+                and _product_is_related(previous_product, current_product)
+                and same_logic
+            )
+
+        if not should_merge:
+            merged.append(clip)
+            continue
+
+        previous_start, previous_end = previous_range
+        current_start, current_end = current_range
+        previous["start_time"] = _seconds_to_srt_time(min(previous_start, current_start))
+        previous["end_time"] = _seconds_to_srt_time(max(previous_end, current_end))
+        previous["duration"] = round(max(previous_end, current_end) - min(previous_start, current_start), 3)
+        previous["duration_seconds"] = previous["duration"]
+        previous["cross_chunk_merged"] = True
+        previous["merged_chunk_indexes"] = sorted(
+            set(previous.get("merged_chunk_indexes") or [previous_chunk]) | {current_chunk}
+        )
+        for field in ("content", "summary", "selling_point", "cut_reason"):
+            left = str(previous.get(field) or "").strip()
+            right = str(clip.get(field) or "").strip()
+            if right and right not in left:
+                previous[field] = f"{left} {right}".strip()
+        logger.info(
+            "Merged cross-chunk product section %s across chunks %s and %s",
+            previous_product or current_product,
+            previous_chunk,
+            current_chunk,
+        )
+
+    return merged
+
+
 def _parse_advised_ranges(text: str, parent_start: float, parent_end: float) -> List[Tuple[float, float]]:
     if not text:
         return []

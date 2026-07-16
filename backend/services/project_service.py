@@ -14,7 +14,7 @@ from ..repositories.project_repository import ProjectRepository
 from ..models.project import Project
 from ..models.task import Task
 from ..models.clip import Clip
-from ..models.collection import Collection
+from ..models.collection import Collection, clip_collection
 from ..schemas.project import ProjectCreate, ProjectUpdate, ProjectResponse, ProjectListResponse, ProjectFilter
 from ..schemas.base import PaginationParams, PaginationResponse
 from ..schemas.project import ProjectType, ProjectStatus
@@ -234,31 +234,27 @@ class ProjectService(BaseService[Project, ProjectCreate, ProjectUpdate, ProjectR
             
             logger.info(f"开始删除项目 {project_id}: {project.name}")
             
-            # 检查是否有正在运行的任务（只对非完成状态的项目进行检查）
-            if project.status not in ["completed", "failed"]:
-                running_tasks = self.db.query(Task).filter(
-                    Task.project_id == project_id,
-                    Task.status == TaskStatus.RUNNING
-                ).count()
-                
-                if running_tasks > 0:
-                    logger.warning(f"项目 {project_id} 有 {running_tasks} 个正在运行的任务，无法删除")
-                    return False
-            else:
-                # 对于已完成或失败的项目，记录任务状态但不阻止删除
-                running_tasks = self.db.query(Task).filter(
-                    Task.project_id == project_id,
-                    Task.status == TaskStatus.RUNNING
-                ).count()
-                
-                if running_tasks > 0:
-                    logger.info(f"项目 {project_id} 已完成，但仍有 {running_tasks} 个标记为运行中的任务，将一并删除")
+            running_tasks = self.db.query(Task).filter(
+                Task.project_id == project_id,
+                Task.status == TaskStatus.RUNNING
+            ).count()
+            if running_tasks > 0:
+                logger.info(f"项目 {project_id} 有 {running_tasks} 个运行中的任务，将强制一并删除")
             
             # 开始事务（如果还没有开始的话）
             if not self.db.in_transaction():
                 self.db.begin()
             
             try:
+                clip_ids = [row[0] for row in self.db.query(Clip.id).filter(Clip.project_id == project_id).all()]
+                collection_ids = [row[0] for row in self.db.query(Collection.id).filter(Collection.project_id == project_id).all()]
+                if clip_ids or collection_ids:
+                    assoc_delete = clip_collection.delete().where(
+                        (clip_collection.c.clip_id.in_(clip_ids)) |
+                        (clip_collection.c.collection_id.in_(collection_ids))
+                    )
+                    self.db.execute(assoc_delete)
+
                 # 1. 删除相关任务
                 task_count = self.db.query(Task).filter(Task.project_id == project_id).count()
                 if task_count > 0:
@@ -311,7 +307,8 @@ class ProjectService(BaseService[Project, ProjectCreate, ProjectUpdate, ProjectR
         """
         try:
             # 项目目录路径
-            project_dir = Path(f"data/projects/{project_id}")
+            from ..core.path_utils import get_project_directory
+            project_dir = get_project_directory(project_id)
             
             if project_dir.exists():
                 logger.info(f"删除项目目录: {project_dir}")
@@ -376,4 +373,3 @@ class ProjectService(BaseService[Project, ProjectCreate, ProjectUpdate, ProjectR
         except Exception as e:
             logger.error(f"清理项目进度数据失败: {str(e)}")
     
- 

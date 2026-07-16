@@ -144,7 +144,7 @@ async def upload_files(
             
             # 检查是否已有相同项目正在处理中
             from ...models.task import Task, TaskStatus
-            existing_task = db.query(Task).filter(
+            existing_task = project_service.db.query(Task).filter(
                 Task.project_id == project_id,
                 Task.status == TaskStatus.RUNNING,
                 Task.name.like('%导入%')
@@ -763,11 +763,28 @@ async def get_processing_status(
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         
-        # 获取最新的任务
-        tasks = project.tasks if hasattr(project, 'tasks') else []
-        latest_task = None
-        if tasks:
-            latest_task = max(tasks, key=lambda t: t.created_at) if hasattr(tasks[0], 'created_at') else tasks[0]
+        from ...models.task import Task, TaskStatus
+
+        latest_task = (
+            project_service.db.query(Task)
+            .filter(Task.project_id == project_id, Task.status == TaskStatus.RUNNING)
+            .order_by(Task.created_at.desc())
+            .first()
+        )
+        if not latest_task:
+            latest_task = (
+                project_service.db.query(Task)
+                .filter(Task.project_id == project_id, Task.name == "视频处理流水线")
+                .order_by(Task.created_at.desc())
+                .first()
+            )
+        if not latest_task:
+            latest_task = (
+                project_service.db.query(Task)
+                .filter(Task.project_id == project_id)
+                .order_by(Task.created_at.desc())
+                .first()
+            )
         
         if not latest_task:
             return {

@@ -119,23 +119,10 @@ async def upload_files(
         
         # 处理字幕文件（如果用户提供了）
         srt_path = None
-        if not srt_file:
-            try:
-                from backend.services.subtitle_cache import copy_cached_subtitle
-                srt_path = copy_cached_subtitle(video_path, raw_dir / "input.srt")
-                if srt_path:
-                    logger.info(f"复用字幕缓存: {srt_path}")
-            except Exception as cache_error:
-                logger.warning(f"字幕缓存检查失败: {cache_error}")
         if srt_file:
             # 用户提供了字幕文件
             srt_path = raw_dir / "input.srt"
             await save_upload_file(srt_file, srt_path)
-            try:
-                from backend.services.subtitle_cache import cache_subtitle
-                cache_subtitle(video_path, srt_path, "provided")
-            except Exception as cache_error:
-                logger.warning(f"字幕缓存写入失败: {cache_error}")
             logger.info(f"用户提供的字幕文件已保存: {srt_path}")
         
         # 启动异步处理任务

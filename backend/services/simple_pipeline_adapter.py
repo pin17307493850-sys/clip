@@ -62,7 +62,6 @@ class SimplePipelineAdapter:
             # 使用Whisper本地模型生成字幕
             try:
                 from backend.utils.speech_recognizer import generate_subtitle_for_video
-                from backend.services.subtitle_cache import cache_subtitle, copy_cached_subtitle
                 from pathlib import Path
                 
                 video_file_path = Path(video_path)
@@ -92,12 +91,6 @@ class SimplePipelineAdapter:
                     whisper_compute_type,
                 )
                 output_path = metadata_dir / f"{video_file_path.stem}.srt"
-                cached_path = copy_cached_subtitle(video_file_path, output_path)
-                if cached_path:
-                    logger.info(f"复用字幕缓存: {cached_path}")
-                    emit_progress(self.project_id, "SUBTITLE", "已复用历史字幕，跳过AI识别", subpercent=100)
-                    return cached_path
-
                 last_progress_emit = {"ts": 0.0, "percent": -1}
 
                 def subtitle_progress(
@@ -154,7 +147,6 @@ class SimplePipelineAdapter:
                 
                 if srt_path and srt_path.exists():
                     logger.info(f"Whisper生成字幕成功: {srt_path}")
-                    cache_subtitle(video_file_path, srt_path, whisper_model)
                     emit_progress(self.project_id, "SUBTITLE", "AI字幕生成完成", subpercent=40)
                     return srt_path
                 else:

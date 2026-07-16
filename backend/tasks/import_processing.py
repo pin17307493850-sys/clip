@@ -87,7 +87,6 @@ def process_import_task(self, project_id: str, video_path: str, srt_file_path: O
                 from backend.utils.speech_recognizer import generate_subtitle_for_video
                 from backend.core.desktop_config import get_desktop_config
                 from backend.services.simple_progress import emit_progress
-                from backend.services.subtitle_cache import cache_subtitle, copy_cached_subtitle
                 
                 # 获取用户配置的语音转写设置
                 config = get_desktop_config()
@@ -152,21 +151,15 @@ def process_import_task(self, project_id: str, video_path: str, srt_file_path: O
                             subpercent=percent,
                         )
 
-                    cached_subtitle = copy_cached_subtitle(Path(video_path), Path(video_path).parent / "input.srt")
-                    if cached_subtitle:
-                        logger.info(f"复用字幕缓存: {cached_subtitle}")
-                        emit_progress(project_id, "SUBTITLE", "已复用历史字幕，跳过AI识别", subpercent=100)
-                        generated_subtitle = cached_subtitle
-                    else:
-                        generated_subtitle = generate_subtitle_for_video(
-                            Path(video_path),
-                            language=language,
-                            model=model,
-                            device=device,
-                            compute_type=compute_type,
-                            method=speech_config.method,
-                            progress_callback=subtitle_progress,
-                        )
+                    generated_subtitle = generate_subtitle_for_video(
+                        Path(video_path),
+                        language=language,
+                        model=model,
+                        device=device,
+                        compute_type=compute_type,
+                        method=speech_config.method,
+                        progress_callback=subtitle_progress,
+                    )
                 else:
                     # 使用API服务
                     logger.info(f"使用API服务 - {speech_config.method}")
@@ -192,7 +185,6 @@ def process_import_task(self, project_id: str, video_path: str, srt_file_path: O
                     )
                 
                 srt_path = str(generated_subtitle)
-                cache_subtitle(Path(video_path), Path(srt_path), getattr(speech_config.whisper_config, "model_name", ""))
                 logger.info(f"语音转写成功: {srt_path}")
                 
             except Exception as e:
@@ -221,7 +213,6 @@ def process_import_task(self, project_id: str, video_path: str, srt_file_path: O
                             )
                         
                         srt_path = str(generated_subtitle)
-                        cache_subtitle(Path(video_path), Path(srt_path), getattr(speech_config.whisper_config, "model_name", ""))
                         logger.info(f"回退方法成功: {srt_path}")
                         
                     except Exception as fallback_error:

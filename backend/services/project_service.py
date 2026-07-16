@@ -284,12 +284,14 @@ class ProjectService(BaseService[Project, ProjectCreate, ProjectUpdate, ProjectR
                 # 5. 提交事务
                 self.db.commit()
                 
-                # 6. 删除项目文件
+                # 6. 必须在删除源视频前清理缓存，否则无法再计算视频指纹
+                self._delete_subtitle_cache(video_path_to_uncache)
+
+                # 7. 删除项目文件
                 self._delete_project_files(project_id)
                 
-                # 7. 清理进度数据
+                # 8. 清理进度数据
                 self._cleanup_project_progress(project_id)
-                self._delete_subtitle_cache(video_path_to_uncache)
                 
                 logger.info(f"项目 {project_id} 删除成功")
                 return True

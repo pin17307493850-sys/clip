@@ -26,8 +26,14 @@ class CeleryConfig:
     enable_utc = True
     
     # Redis配置
-    broker_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-    result_backend = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    # 桌面模式使用本地后台线程执行任务，不应依赖 Redis。
+    # 否则 task.update_state() 会尝试连接 localhost:6379，导致导入任务误报失败。
+    if os.getenv("AUTOCLIP_DESKTOP_MODE", "").lower() in {"1", "true", "yes"}:
+        broker_url = "memory://"
+        result_backend = "cache+memory://"
+    else:
+        broker_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+        result_backend = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
     
     # 任务配置
     task_always_eager = os.getenv('CELERY_ALWAYS_EAGER', 'False').lower() == 'true'  # 生产环境异步执行

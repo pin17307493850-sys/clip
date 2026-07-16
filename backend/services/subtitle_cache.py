@@ -71,3 +71,20 @@ def cache_subtitle(video_path: Path, subtitle_path: Path, model_name: str = "") 
         encoding="utf-8",
     )
     return cached_srt
+
+
+def delete_cached_subtitle(video_path: Path) -> bool:
+    """Delete the reusable subtitle cache for a video fingerprint."""
+    try:
+        fingerprint = compute_video_fingerprint(Path(video_path))
+    except Exception:
+        return False
+
+    deleted = False
+    cache_dir = _subtitle_cache_dir()
+    for suffix in (".srt", ".json"):
+        cache_file = cache_dir / f"{fingerprint}{suffix}"
+        if cache_file.exists():
+            cache_file.unlink()
+            deleted = True
+    return deleted

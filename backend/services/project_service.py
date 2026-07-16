@@ -234,6 +234,8 @@ class ProjectService(BaseService[Project, ProjectCreate, ProjectUpdate, ProjectR
             
             logger.info(f"开始删除项目 {project_id}: {project.name}")
             
+            video_path_to_uncache = project.video_path or project.source_file
+
             running_tasks = self.db.query(Task).filter(
                 Task.project_id == project_id,
                 Task.status == TaskStatus.RUNNING
@@ -287,6 +289,7 @@ class ProjectService(BaseService[Project, ProjectCreate, ProjectUpdate, ProjectR
                 
                 # 7. 清理进度数据
                 self._cleanup_project_progress(project_id)
+                self._delete_subtitle_cache(video_path_to_uncache)
                 
                 logger.info(f"项目 {project_id} 删除成功")
                 return True
@@ -325,6 +328,18 @@ class ProjectService(BaseService[Project, ProjectCreate, ProjectUpdate, ProjectR
             task.completed_at = datetime.utcnow()
             task.error_message = "项目已被用户删除，任务已取消"
         self.db.flush()
+
+    def _delete_subtitle_cache(self, video_path: Optional[str]) -> None:
+        """Delete subtitle cache for the project's source video when the project is deleted."""
+        if not video_path:
+            return
+        try:
+            from .subtitle_cache import delete_cached_subtitle
+
+            if delete_cached_subtitle(Path(video_path)):
+                logger.info("已删除项目视频对应的字幕缓存: %s", video_path)
+        except Exception as cache_error:
+            logger.warning("删除字幕缓存失败，将继续完成项目删除: %s", cache_error)
     
     def _delete_project_files(self, project_id: str):
         """

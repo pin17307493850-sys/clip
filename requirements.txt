@@ -3,6 +3,8 @@ uvicorn[standard]
 sqlalchemy
 alembic
 celery[redis]
+flower
+faster-whisper
 redis
 pydantic
 pydantic-settings

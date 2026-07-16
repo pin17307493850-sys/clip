@@ -162,8 +162,16 @@ class VideoProcessor:
                 '-ss', ffmpeg_start_time,  # 在输入前定位，更精确
                 '-i', str(input_video),
                 '-t', str(duration),  # 使用持续时间而不是绝对结束时间
-                '-c:v', 'copy',  # 复制视频流
-                '-c:a', 'copy',  # 复制音频流
+                # Always export browser-compatible H.264/AAC. Source recordings
+                # are frequently HEVC; stream-copying them produces MP4 files
+                # whose audio plays in Edge/Chrome while the picture stays black.
+                '-c:v', 'libx264',
+                '-preset', 'veryfast',
+                '-crf', '23',
+                '-pix_fmt', 'yuv420p',
+                '-c:a', 'aac',
+                '-b:a', '128k',
+                '-movflags', '+faststart',
                 '-avoid_negative_ts', 'make_zero',
                 '-y',  # 覆盖输出文件
                 str(output_path)

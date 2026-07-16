@@ -29,12 +29,15 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./uploads:/app/uploads
+      - ${USERPROFILE}/Downloads:/host-files/Downloads:ro
+      - ${USERPROFILE}/Videos:/host-files/Videos:ro
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=sqlite:///./data/autoclip.db
       - ENVIRONMENT=production
       - DEBUG=false
       - LOG_LEVEL=INFO
+      - AUTOCLIP_LOCAL_IMPORT_ROOTS=/host-files
     depends_on:
       redis:
         condition: service_healthy
@@ -62,12 +65,14 @@ services:
       - ENVIRONMENT=production
       - DEBUG=false
       - LOG_LEVEL=INFO
-    command: celery -A backend.core.celery_app worker --loglevel=info --concurrency=2
+    command: celery -A backend.core.celery_app worker --loglevel=info --concurrency=1 -Q celery,processing,video,notification,upload
     depends_on:
       redis:
         condition: service_healthy
       autoclip:
         condition: service_healthy
+    healthcheck:
+      disable: true
 
   # Celery Beat调度器
   celery-beat:
@@ -91,6 +96,8 @@ services:
         condition: service_healthy
       autoclip:
         condition: service_healthy
+    healthcheck:
+      disable: true
 
   # Flower监控服务（可选）
   flower:
@@ -111,6 +118,8 @@ services:
         condition: service_healthy
       celery-worker:
         condition: service_started
+    healthcheck:
+      disable: true
 
 volumes:
   redis_data:

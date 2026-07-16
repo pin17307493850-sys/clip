@@ -3,6 +3,7 @@
 """
 
 import logging
+import os
 from typing import List, Optional
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
@@ -20,10 +21,32 @@ from backend.schemas.project import (
 )
 from backend.schemas.base import PaginationParams
 from pathlib import Path
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 UPLOAD_CHUNK_SIZE = 2 * 1024 * 1024
+LOCAL_VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mov', '.mkv', '.webm'}
+
+
+class LocalImportRequest(BaseModel):
+    path: str
+    project_name: str
+    video_category: Optional[str] = None
+
+
+def _local_import_roots() -> List[Path]:
+    configured = os.getenv("AUTOCLIP_LOCAL_IMPORT_ROOTS", "/host-files")
+    return [Path(value).resolve() for value in configured.split(os.pathsep) if value.strip()]
+
+
+def _resolve_local_import_path(value: str) -> Path:
+    candidate = Path(value).resolve()
+    if not any(candidate == root or root in candidate.parents for root in _local_import_roots()):
+        raise HTTPException(status_code=403, detail="只能导入已授权本机目录中的文件")
+    if not candidate.is_file() or candidate.suffix.lower() not in LOCAL_VIDEO_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="本机视频文件不存在或格式不受支持")
+    return candidate
 
 
 async def save_upload_file(upload_file: UploadFile, target_path: Path) -> None:
@@ -200,6 +223,47 @@ async def upload_files(
     except Exception as e:
         logger.exception("上传文件创建项目失败")
         raise HTTPException(status_code=500, detail="创建项目失败，请稍后重试")
+
+
+@router.get("/local-files")
+async def list_local_video_files():
+    """List videos exposed by the desktop Docker host mounts."""
+    files = []
+    for root in _local_import_roots():
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if path.is_file() and path.suffix.lower() in LOCAL_VIDEO_EXTENSIONS:
+                stat = path.stat()
+                files.append({
+                    "path": str(path),
+                    "name": path.name,
+                    "size": stat.st_size,
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                })
+    files.sort(key=lambda item: item["modified_at"], reverse=True)
+    return files[:500]
+
+
+@router.post("/import-local", response_model=ProjectResponse)
+async def import_local_video(
+    request: LocalImportRequest,
+    project_service: ProjectService = Depends(get_project_service),
+):
+    """Import a host-mounted video without sending its bytes through the browser."""
+    source = _resolve_local_import_path(request.path)
+    handle = source.open("rb")
+    upload = UploadFile(filename=source.name, file=handle, size=source.stat().st_size)
+    try:
+        return await upload_files(
+            video_file=upload,
+            srt_file=None,
+            project_name=request.project_name,
+            video_category=request.video_category,
+            project_service=project_service,
+        )
+    finally:
+        await upload.close()
 
 
 @router.post("/", response_model=ProjectResponse)
@@ -1010,7 +1074,8 @@ async def get_project_clip(
         return FileResponse(
             path=str(video_file),
             media_type="video/mp4",
-            filename=video_file.name
+            filename=video_file.name,
+            headers={"Cache-Control": "no-cache"},
         )
     except HTTPException:
         raise

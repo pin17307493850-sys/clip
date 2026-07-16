@@ -128,6 +128,13 @@ export interface UploadFilesRequest {
   onProgress?: (percent: number) => void
 }
 
+export interface LocalVideoFile {
+  path: string
+  name: string
+  size: number
+  modified_at: string
+}
+
 export interface VideoCategory {
   value: string
   name: string
@@ -277,6 +284,18 @@ export const projectApi = {
       })
       throw error
     }
+  },
+
+  getLocalVideoFiles: async (): Promise<LocalVideoFile[]> => {
+    return api.get('/projects/local-files')
+  },
+
+  importLocalFile: async (data: {
+    path: string
+    project_name: string
+    video_category?: string
+  }): Promise<Project> => {
+    return api.post('/projects/import-local', data, { timeout: 0 })
   },
 
   // 删除项目

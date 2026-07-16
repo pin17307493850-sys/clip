@@ -4,9 +4,11 @@
 """
 import logging
 import os
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from backend.api.v1 import api_router
 from backend.api.v1.health import router as health_router
@@ -185,5 +187,11 @@ def create_app(mode: str = "web") -> FastAPI:
                 status_code=500, 
                 content={"status": "error", "detail": str(e)}
             )
+
+    # The production image already contains the compiled frontend. Mount it
+    # last so API routes retain priority while localhost:8000 serves the UI.
+    frontend_dist = Path("/app/frontend/dist")
+    if frontend_dist.exists():
+        app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="frontend")
     
     return app

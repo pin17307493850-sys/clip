@@ -104,30 +104,34 @@ def process_import_task(self, project_id: str, video_path: str, srt_file_path: O
                     enable_punctuation = speech_config.whisper_config.enable_punctuation
                     enable_speaker_diarization = speech_config.whisper_config.enable_speaker_diarization
                     timeout = speech_config.whisper_config.timeout
-                    
+
                     logger.info(f"Whisper配置 - 模型: {model}, 语言: {language}, 时间戳: {enable_timestamps}")
-                    
+                    emit_progress(
+                        project_id,
+                        "SUBTITLE",
+                        f"正在加载 Whisper {model} 模型并准备音频",
+                        subpercent=5,
+                    )
+
                     last_progress_emit = {"ts": 0.0, "percent": -1}
 
                     def subtitle_progress(current_seconds: float, total_seconds: float, segment_count: int) -> None:
-                        if total_seconds <= 0:
-                            return
                         now = time.monotonic()
-                        percent = max(25, min(95, 25 + (current_seconds / total_seconds) * 70))
+                        if total_seconds > 0 and current_seconds > 0:
+                            percent = max(25, min(95, 25 + (current_seconds / total_seconds) * 70))
+                            message = (
+                                f"AI字幕识别中 {current_seconds / 60:.1f}/{total_seconds / 60:.1f} 分钟，"
+                                f"{segment_count} 段"
+                            )
+                        else:
+                            percent = max(10, last_progress_emit["percent"])
+                            message = "Whisper 模型运行中，正在等待首段识别结果"
                         rounded_percent = int(percent)
-                        if (
-                            rounded_percent <= last_progress_emit["percent"]
-                            and now - last_progress_emit["ts"] < 8
-                        ):
+                        if rounded_percent <= last_progress_emit["percent"] and now - last_progress_emit["ts"] < 8:
                             return
                         last_progress_emit["ts"] = now
                         last_progress_emit["percent"] = rounded_percent
-                        emit_progress(
-                            project_id,
-                            "SUBTITLE",
-                            f"AI字幕识别中 {current_seconds / 60:.1f}/{total_seconds / 60:.1f} 分钟，{segment_count} 段",
-                            subpercent=percent,
-                        )
+                        emit_progress(project_id, "SUBTITLE", message, subpercent=percent)
 
                     cached_subtitle = copy_cached_subtitle(Path(video_path), Path(video_path).parent / "input.srt")
                     if cached_subtitle:

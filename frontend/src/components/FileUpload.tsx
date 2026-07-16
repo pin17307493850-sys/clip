@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react'
-import { Button, message, Space, Typography, Input, Progress } from 'antd'
+import { Button, message, Space, Typography, Input, Progress, Select } from 'antd'
 import { InboxOutlined, VideoCameraOutlined, FileTextOutlined, SubnodeOutlined } from '@ant-design/icons'
 import { useDropzone } from 'react-dropzone'
-import { projectApi, VideoCategory } from '../services/api'
+import { projectApi, VideoCategory, LocalVideoFile } from '../services/api'
 import { useProjectStore } from '../store/useProjectStore'
 import { validateApiConfigBeforeProjectCreation } from '../utils/apiConfigCheck'
 
@@ -18,6 +18,9 @@ const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
   const [projectName, setProjectName] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<string>('')
   const [categories, setCategories] = useState<VideoCategory[]>([])
+  const [localFiles, setLocalFiles] = useState<LocalVideoFile[]>([])
+  const [localPath, setLocalPath] = useState('')
+  const [localImporting, setLocalImporting] = useState(false)
   const [, setLoadingCategories] = useState(false)
   const [files, setFiles] = useState<{
     video?: File
@@ -49,6 +52,38 @@ const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
 
     loadCategories()
   }, [])
+
+  useEffect(() => {
+    projectApi.getLocalVideoFiles().then(setLocalFiles).catch(() => setLocalFiles([]))
+  }, [])
+
+  const handleLocalImport = async () => {
+    const selected = localFiles.find(file => file.path === localPath)
+    if (!selected) {
+      message.error('请选择本机视频')
+      return
+    }
+    const valid = await validateApiConfigBeforeProjectCreation()
+    if (!valid) return
+    setLocalImporting(true)
+    try {
+      const name = projectName.trim() || selected.name.replace(/\.[^/.]+$/, '')
+      const project = await projectApi.importLocalFile({
+        path: selected.path,
+        project_name: name,
+        video_category: selectedCategory,
+      })
+      addProject(project)
+      message.success('本机文件已直导，正在后台处理')
+      setLocalPath('')
+      setProjectName('')
+      onUploadSuccess?.(project.id)
+    } catch (error: any) {
+      message.error(error?.response?.data?.detail || error?.message || '本机文件直导失败')
+    } finally {
+      setLocalImporting(false)
+    }
+  }
 
   const onDrop = (acceptedFiles: File[]) => {
     const newFiles = { ...files }
@@ -213,6 +248,32 @@ const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
       
 
       
+      {localFiles.length > 0 && (
+        <div style={{ marginBottom: 16, padding: 16, border: '1px solid rgba(82,196,26,.3)', borderRadius: 12 }}>
+          <Text strong style={{ color: '#fff', display: 'block', marginBottom: 8 }}>本机文件直导（无需浏览器上传）</Text>
+          <Space.Compact style={{ width: '100%' }}>
+            <Select
+              showSearch
+              value={localPath || undefined}
+              placeholder="选择下载或视频目录中的文件"
+              style={{ flex: 1 }}
+              optionFilterProp="label"
+              onChange={(value) => {
+                setLocalPath(value)
+                const file = localFiles.find(item => item.path === value)
+                if (file) setProjectName(file.name.replace(/\.[^/.]+$/, ''))
+              }}
+              options={localFiles.map(file => ({
+                value: file.path,
+                label: `${file.name}（${(file.size / 1024 / 1024).toFixed(0)} MB）`,
+              }))}
+            />
+            <Button type="primary" loading={localImporting} onClick={handleLocalImport}>直接导入</Button>
+          </Space.Compact>
+          <Text style={{ color: 'var(--ac-sub)', fontSize: 12 }}>读取 Downloads / Videos，文件只在本机磁盘间复制一次。</Text>
+        </div>
+      )}
+
       <div 
         {...getRootProps()} 
         className={`upload-area ${isDragActive ? 'dragover' : ''}`}
@@ -264,7 +325,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
       </div>
 
       {/* 项目名称输入 - 只有在选择文件后才显示 */}
-      {files.video && (
+      {(files.video || localPath) && (
         <div style={{ marginBottom: '16px' }}>
           <Text strong style={{ color: '#ffffff', fontSize: '14px', marginBottom: '8px', display: 'block' }}>
             项目名称
@@ -286,7 +347,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
       )}
 
       {/* 视频分类选择 - 只有在选择文件后才显示 */}
-      {files.video && (
+      {(files.video || localPath) && (
         <div style={{ marginBottom: '16px' }}>
           <Text strong style={{ color: '#ffffff', fontSize: '14px', marginBottom: '8px', display: 'block' }}>
             视频分类

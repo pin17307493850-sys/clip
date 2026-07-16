@@ -3,6 +3,7 @@
 支持本地Whisper、OpenAI API、Azure Speech Services等多种语音识别服务
 """
 import logging
+import threading
 import subprocess
 import json
 import os
@@ -251,8 +252,8 @@ class SpeechRecognizer:
         try:
             # 检查ffmpeg是否可用
             ffmpeg_bin = get_ffmpeg_path()
-            result = subprocess.run([ffmpeg_bin, '-version'], 
-                                  capture_output=True, text=True, timeout=10)
+            result = subprocess.run([ffmpeg_bin, '-version'],
+                                  capture_output=True, text=True, timeout=30)
             if result.returncode != 0:
                 raise SpeechRecognitionError("ffmpeg不可用，请安装ffmpeg")
             
@@ -458,16 +459,40 @@ class SpeechRecognizer:
                 )
                 duration = float(getattr(info, "duration", 0) or 0)
                 segments = []
-                for index, segment in enumerate(seg_iter, start=1):
-                    segments.append({"start": segment.start, "end": segment.end, "text": segment.text})
-                    if progress_callback and duration > 0:
-                        progress_callback(float(segment.end), duration, index)
-                    if index == 1 or index % 20 == 0:
-                        logger.info(
-                            "Whisper transcribed %s segments, latest end %.2fs",
-                            index,
-                            segment.end,
-                        )
+                progress_state = {"seconds": 0.0, "segments": 0}
+                heartbeat_stop = threading.Event()
+
+                def progress_heartbeat() -> None:
+                    while not heartbeat_stop.wait(20):
+                        if progress_callback:
+                            progress_callback(
+                                float(progress_state["seconds"]),
+                                duration,
+                                int(progress_state["segments"]),
+                            )
+
+                heartbeat_thread = threading.Thread(
+                    target=progress_heartbeat,
+                    name="whisper-progress-heartbeat",
+                    daemon=True,
+                )
+                heartbeat_thread.start()
+                try:
+                    for index, segment in enumerate(seg_iter, start=1):
+                        segments.append({"start": segment.start, "end": segment.end, "text": segment.text})
+                        progress_state["seconds"] = float(segment.end)
+                        progress_state["segments"] = index
+                        if progress_callback and duration > 0:
+                            progress_callback(float(segment.end), duration, index)
+                        if index == 1 or index % 20 == 0:
+                            logger.info(
+                                "Whisper transcribed %s segments, latest end %.2fs",
+                                index,
+                                segment.end,
+                            )
+                finally:
+                    heartbeat_stop.set()
+                    heartbeat_thread.join(timeout=2)
                 if not segments:
                     raise SpeechRecognitionError("Whisper 未识别出任何语音内容")
 

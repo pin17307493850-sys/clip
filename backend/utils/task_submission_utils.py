@@ -85,7 +85,9 @@ def submit_video_pipeline_task(project_id: str, input_video_path: str, input_srt
             
             # 检查任务是否真的提交到队列
             import redis
-            r = redis.Redis(host='localhost', port=6379, db=0)
+            r = redis.Redis.from_url(
+                os.getenv("REDIS_URL", "redis://localhost:6379/0")
+            )
             queue_length = r.llen('processing')
             logger.info(f"Redis队列长度: {queue_length}")
             

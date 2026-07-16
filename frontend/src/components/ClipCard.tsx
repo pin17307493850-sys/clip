@@ -41,9 +41,13 @@ const ClipCard: React.FC<ClipCardProps> = ({
     
     const video = document.createElement('video')
     video.crossOrigin = 'anonymous'
-    video.currentTime = 1 // 获取第1秒的帧作为缩略图
-    
-    video.onloadeddata = () => {
+    video.preload = 'metadata'
+
+    video.onloadedmetadata = () => {
+      video.currentTime = Math.min(1, Math.max(0, video.duration / 10))
+    }
+
+    video.onseeked = () => {
       const canvas = document.createElement('canvas')
       const ctx = canvas.getContext('2d')
       if (!ctx) return
@@ -54,9 +58,11 @@ const ClipCard: React.FC<ClipCardProps> = ({
       
       const thumbnail = canvas.toDataURL('image/jpeg', 0.8)
       setVideoThumbnail(thumbnail)
+      video.removeAttribute('src')
+      video.load()
     }
-    
-    video.src = videoUrl
+
+    video.src = `${videoUrl}${videoUrl.includes('?') ? '&' : '?'}thumbnail=1`
   }
 
   const handleDownloadWithTitle = async () => {

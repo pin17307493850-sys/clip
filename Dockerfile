@@ -2,22 +2,18 @@
 # 多阶段构建，优化镜像大小
 
 # 第一阶段：构建前端
-FROM node:18-slim AS frontend-builder
+FROM node:18-bookworm-slim AS frontend-builder
 
 WORKDIR /app/frontend
 
 # 安装必要的系统依赖
-RUN apt-get update && apt-get install -y \
-    python3 \
-    make \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
-
 # 复制前端依赖文件
 COPY frontend/package*.json ./
 
 # 安装前端依赖（使用完整安装，包括devDependencies）
-RUN npm ci
+RUN npm config set registry https://registry.npmmirror.com \
+    && npm config set fetch-retries 5 \
+    && npm ci
 
 # 复制前端源代码
 COPY frontend/ ./
@@ -26,7 +22,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # 第二阶段：构建后端
-FROM python:3.9-slim AS backend-builder
+FROM python:3.9-slim-bookworm AS backend-builder
 
 # 设置环境变量
 ENV PYTHONUNBUFFERED=1
@@ -37,20 +33,16 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
 
 # 安装系统依赖
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
 # 复制Python依赖文件
 COPY requirements.txt ./
 
 # 安装Python依赖
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --retries 8 --timeout 120 \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    -r requirements.txt
 
 # 第三阶段：最终镜像
-FROM python:3.9-slim
+FROM python:3.9-slim-bookworm
 
 # 设置环境变量
 ENV PYTHONUNBUFFERED=1
@@ -61,9 +53,16 @@ ENV PYTHONPATH=/app
 RUN groupadd -r autoclip && useradd -r -g autoclip autoclip
 
 # 安装运行时依赖
-RUN apt-get update && apt-get install -y \
+RUN sed -i \
+      -e 's|http://deb.debian.org/debian|https://mirrors.aliyun.com/debian|g' \
+      -e 's|http://deb.debian.org/debian-security|https://mirrors.aliyun.com/debian-security|g' \
+      /etc/apt/sources.list.d/debian.sources \
+    && apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
     ffmpeg \
     curl \
+    fonts-noto-cjk \
+    fontconfig \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -81,6 +80,7 @@ COPY scripts/ ./scripts/
 COPY *.sh ./
 COPY env.example .env
 COPY docker-entrypoint.sh ./
+RUN sed -i 's/\r$//' docker-entrypoint.sh *.sh
 
 # 创建必要的目录
 RUN mkdir -p data/projects data/uploads data/temp data/output logs

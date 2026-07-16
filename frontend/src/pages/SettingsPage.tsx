@@ -83,7 +83,8 @@ const SettingsPage: React.FC = () => {
       // 检查是否在Desktop模式下运行
       const isDesktop = await isDesktopMode()
       
-      if (isDesktop) {
+      // Docker/Web mode uses the same persistent settings API.
+      if (true) {
         // Desktop模式：调用完整的API
         const [settings, models, provider] = await Promise.allSettled([
           settingsApi.getSettings(),
@@ -174,16 +175,6 @@ const SettingsPage: React.FC = () => {
   const handleSave = async (values: any) => {
     try {
       setLoading(true)
-      
-      // 检查是否在Desktop模式下运行
-      const isDesktop = await isDesktopMode()
-      
-      if (!isDesktop) {
-        // Web模式：只显示提示，不实际保存
-        message.info('Web模式下配置无法保存，请在桌面应用中使用完整功能')
-        setLoading(false)
-        return
-      }
       
       // 先获取现有配置，避免清空已有的API key
       let existingSettings = null

@@ -162,7 +162,7 @@ async def check_desktop_mode_endpoint():
 @router.get("/", response_model=DesktopSettings)
 async def get_settings():
     """获取所有设置"""
-    check_desktop_mode()
+    check_desktop_mode(relaxed=True)
     
     try:
         config = get_desktop_config()
@@ -312,7 +312,7 @@ class TestApiRequest(BaseModel):
 @router.post("/test-api")
 async def test_api_connection(request: TestApiRequest):
     """测试API连接"""
-    check_desktop_mode()
+    check_desktop_mode(relaxed=True)
     
     try:
         # 首先进行基本的API Key格式验证
@@ -394,7 +394,7 @@ async def test_api_connection(request: TestApiRequest):
 @router.put("/", response_model=Dict[str, Any])
 async def update_settings(settings: DesktopSettings):
     """更新设置"""
-    check_desktop_mode()
+    check_desktop_mode(relaxed=True)
     
     try:
         config = get_desktop_config()

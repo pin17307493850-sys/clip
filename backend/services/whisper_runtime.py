@@ -25,6 +25,9 @@ from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# Windows keeps the directory registration alive only while these handles exist.
+_DLL_DIRECTORY_HANDLES = []
+
 # 要安装的运行时包（faster-whisper 带上 ctranslate2、onnxruntime、av、huggingface_hub 等，
 # 不含 PyTorch）
 WHISPER_PACKAGES = ["faster-whisper"]
@@ -57,6 +60,30 @@ def ensure_on_path() -> None:
     install_dir = str(get_install_dir())
     if install_dir not in sys.path:
         sys.path.insert(0, install_dir)
+
+    if os.name == "nt":
+        runtime_dir = Path(install_dir)
+        dll_dirs = [
+            runtime_dir,
+            runtime_dir / "bin",
+            runtime_dir / "ctranslate2",
+            runtime_dir / "nvidia" / "cublas" / "bin",
+            runtime_dir / "nvidia" / "cudnn" / "bin",
+            runtime_dir / "nvidia" / "cuda_runtime" / "bin",
+        ]
+        current_path = os.environ.get("PATH", "").split(os.pathsep)
+        for dll_dir in dll_dirs:
+            if not dll_dir.is_dir():
+                continue
+            dll_dir_str = str(dll_dir)
+            if dll_dir_str not in current_path:
+                os.environ["PATH"] = dll_dir_str + os.pathsep + os.environ.get("PATH", "")
+                current_path.insert(0, dll_dir_str)
+            if hasattr(os, "add_dll_directory"):
+                try:
+                    _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(dll_dir_str))
+                except OSError as exc:
+                    logger.debug("Could not register Whisper DLL directory %s: %s", dll_dir_str, exc)
     # 模型统一缓存到数据目录，便于管理/卸载
     os.environ.setdefault("HF_HOME", str(get_models_dir()))
     # mlx-whisper 解码音频要用 ffmpeg：把内置 ffmpeg 所在目录并入 PATH

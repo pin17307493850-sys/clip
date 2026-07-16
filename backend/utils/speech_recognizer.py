@@ -518,25 +518,49 @@ class SpeechRecognizer:
                         )
                     else:
                         raise
-                _safe_progress_callback(progress_callback, 0, 0, 0, "transcribing")
-                seg_iter, info = model.transcribe(
-                    str(audio_source),
-                    language=language,
-                    vad_filter=True,
-                    beam_size=1,
-                )
-                duration = float(getattr(info, "duration", 0) or 0)
-                segments = []
-                for index, segment in enumerate(seg_iter, start=1):
-                    segments.append({"start": segment.start, "end": segment.end, "text": segment.text})
-                    if duration > 0:
-                        _safe_progress_callback(progress_callback, float(segment.end), duration, index, "transcribing")
-                    if index == 1 or index % 20 == 0:
-                        logger.info(
-                            "Whisper transcribed %s segments, latest end %.2fs",
-                            index,
-                            segment.end,
-                        )
+                def run_transcription(active_model):
+                    _safe_progress_callback(progress_callback, 0, 0, 0, "transcribing")
+                    seg_iter, info = active_model.transcribe(
+                        str(audio_source),
+                        language=language,
+                        vad_filter=True,
+                        beam_size=1,
+                    )
+                    active_duration = float(getattr(info, "duration", 0) or 0)
+                    active_segments = []
+                    for index, segment in enumerate(seg_iter, start=1):
+                        active_segments.append({"start": segment.start, "end": segment.end, "text": segment.text})
+                        if active_duration > 0:
+                            _safe_progress_callback(progress_callback, float(segment.end), active_duration, index, "transcribing")
+                        if index == 1 or index % 20 == 0:
+                            logger.info(
+                                "Whisper transcribed %s segments, latest end %.2fs",
+                                index,
+                                segment.end,
+                            )
+                    return active_segments, active_duration
+
+                try:
+                    segments, duration = run_transcription(model)
+                except Exception as transcribe_error:
+                    cuda_runtime_missing = (
+                        preferred_device != "cpu"
+                        and any(token in str(transcribe_error).lower() for token in ("cublas", "cudnn", "cuda"))
+                    )
+                    if not cuda_runtime_missing:
+                        raise
+                    logger.warning(
+                        "Whisper CUDA transcription failed, falling back to CPU int8: %s",
+                        transcribe_error,
+                    )
+                    _safe_progress_callback(progress_callback, 0, 0, 0, "loading_model")
+                    cpu_model = WhisperModel(
+                        config.model,
+                        device="cpu",
+                        compute_type="int8",
+                        download_root=models_dir,
+                    )
+                    segments, duration = run_transcription(cpu_model)
                 if not segments:
                     raise SpeechRecognitionError("Whisper 未识别出任何语音内容")
 

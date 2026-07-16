@@ -480,6 +480,19 @@ async def start_processing(
                 srt_path = str(srt_file)
             else:
                 srt_path = None
+
+        # Local uploads already generate subtitles in process_import_task and start
+        # analysis afterwards. Waiting here prevents a duplicate AI pipeline from
+        # starting before input.srt exists.
+        if not srt_path and not project.source_url:
+            logger.info("Project %s is waiting for local subtitle generation", project_id)
+            return {
+                "message": "Waiting for subtitle generation",
+                "project_id": project_id,
+                "task_id": None,
+                "celery_task_id": None,
+                "status": "waiting_for_subtitle",
+            }
         
         # 更新项目状态为处理中
         project_service.update_project_status(project_id, "processing")

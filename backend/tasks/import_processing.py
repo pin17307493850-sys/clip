@@ -100,6 +100,8 @@ def process_import_task(self, project_id: str, video_path: str, srt_file_path: O
                     # 使用用户配置的Whisper参数
                     model = speech_config.whisper_config.model_name
                     language = speech_config.whisper_config.language
+                    device = getattr(speech_config.whisper_config, "device", "auto")
+                    compute_type = getattr(speech_config.whisper_config, "compute_type", "auto")
                     enable_timestamps = speech_config.whisper_config.enable_timestamps
                     enable_punctuation = speech_config.whisper_config.enable_punctuation
                     enable_speaker_diarization = speech_config.whisper_config.enable_speaker_diarization
@@ -139,6 +141,8 @@ def process_import_task(self, project_id: str, video_path: str, srt_file_path: O
                             Path(video_path),
                             language=language,
                             model=model,
+                            device=device,
+                            compute_type=compute_type,
                             method=speech_config.method,
                             progress_callback=subtitle_progress,
                         )
@@ -184,6 +188,8 @@ def process_import_task(self, project_id: str, video_path: str, srt_file_path: O
                                 Path(video_path),
                                 language=fallback_config.language,
                                 model=fallback_config.model_name,
+                                device=getattr(fallback_config, "device", "auto"),
+                                compute_type=getattr(fallback_config, "compute_type", "auto"),
                                 method=speech_config.fallback_method
                             )
                         else:

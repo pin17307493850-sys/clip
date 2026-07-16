@@ -6,6 +6,7 @@ import {
   List,
   Popconfirm,
   Progress,
+  Select,
   Space,
   Spin,
   Tag,
@@ -155,12 +156,41 @@ const SpeechRecognitionConfig: React.FC<SpeechRecognitionConfigProps> = () => {
     }
   }
 
+  const handleUseDevice = async (device: 'auto' | 'cuda' | 'cpu') => {
+    if (!speechConfig) return
+
+    const computeType = device === 'cuda' ? 'float16' : device === 'cpu' ? 'int8' : 'auto'
+    try {
+      await speechApi.updateConfig({
+        method: speechConfig.method || 'whisper_local',
+        whisper_config: {
+          ...speechConfig.whisper_config,
+          device,
+          compute_type: computeType,
+        },
+        enable_fallback: speechConfig.enable_fallback,
+        fallback_method: speechConfig.fallback_method,
+        output_format: speechConfig.output_format,
+      })
+      setSpeechConfig((prev) => (
+        prev
+          ? { ...prev, whisper_config: { ...prev.whisper_config, device, compute_type: computeType } }
+          : prev
+      ))
+      message.success(device === 'cuda' ? '已切换为 GPU 加速，新任务生效' : device === 'cpu' ? '已切换为 CPU，新任务生效' : '已切换为自动选择，新任务生效')
+      refresh()
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || '切换Whisper运行设备失败')
+    }
+  }
+
   if (loading) return <Spin />
 
   const installed = runtime?.status === 'installed'
   const installing = runtime?.status === 'installing'
   const supported = runtime?.platform_supported !== false
   const currentModel = speechConfig?.whisper_config?.model_name
+  const currentDevice = speechConfig?.whisper_config?.device || 'auto'
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
@@ -228,6 +258,33 @@ const SpeechRecognitionConfig: React.FC<SpeechRecognitionConfigProps> = () => {
             <Button icon={<ReloadOutlined />} onClick={handleInstall} disabled={!supported}>重试安装</Button>
           </Space>
         )}
+      </Card>
+
+      <Card size="small" title="Whisper 加速">
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message="推荐选择自动或 GPU"
+            description="自动模式会优先检测 CUDA。若 CUDA 运行库不匹配，会自动回退到 CPU。批量导入时字幕识别仍保持串行，避免显存和内存被多个任务同时占满。"
+          />
+          <Space wrap>
+            <Text strong>运行设备</Text>
+            <Select
+              value={currentDevice}
+              style={{ width: 180 }}
+              onChange={handleUseDevice}
+              options={[
+                { value: 'auto', label: '自动（推荐）' },
+                { value: 'cuda', label: 'GPU / CUDA' },
+                { value: 'cpu', label: 'CPU' },
+              ]}
+            />
+            <Tag color={currentDevice === 'cuda' ? 'green' : currentDevice === 'cpu' ? 'gold' : 'blue'}>
+              {currentDevice === 'cuda' ? 'GPU 加速' : currentDevice === 'cpu' ? 'CPU 模式' : '自动选择'}
+            </Tag>
+          </Space>
+        </Space>
       </Card>
 
       <Card size="small" title="Whisper 模型">

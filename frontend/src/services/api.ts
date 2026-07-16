@@ -721,6 +721,8 @@ export interface SpeechRecognitionConfig {
     model_name: string
     language: string
     custom_models_dir?: string
+    device?: 'auto' | 'cuda' | 'cpu'
+    compute_type?: 'auto' | 'float16' | 'int8' | 'int8_float16' | 'float32'
     enable_timestamps?: boolean
     enable_punctuation?: boolean
     enable_speaker_diarization?: boolean

@@ -138,6 +138,8 @@ async def get_speech_config(config: DesktopConfig = Depends(get_desktop_config))
                 "model_name": speech_config.whisper_config.model_name,
                 "language": speech_config.whisper_config.language,
                 "custom_models_dir": speech_config.whisper_config.custom_models_dir,
+                "device": getattr(speech_config.whisper_config, "device", "auto"),
+                "compute_type": getattr(speech_config.whisper_config, "compute_type", "auto"),
                 "enable_timestamps": speech_config.whisper_config.enable_timestamps,
                 "enable_punctuation": speech_config.whisper_config.enable_punctuation,
                 "enable_speaker_diarization": speech_config.whisper_config.enable_speaker_diarization,

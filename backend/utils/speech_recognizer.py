@@ -111,6 +111,8 @@ class SpeechRecognitionConfig:
     method: SpeechRecognitionMethod = SpeechRecognitionMethod.WHISPER_LOCAL
     language: LanguageCode = LanguageCode.AUTO
     model: str = "base"  # Whisper模型大小
+    device: str = "auto"  # auto/cuda/cpu
+    compute_type: str = "auto"  # auto/float16/int8
     timeout: int = 0  # 超时时间（秒），0表示无限制
     output_format: str = "srt"  # 输出格式
     enable_timestamps: bool = True  # 是否启用时间戳
@@ -149,6 +151,14 @@ class SpeechRecognitionConfig:
         valid_models = ["tiny", "base", "small", "medium", "large", "large-v3"]
         if self.model not in valid_models:
             raise ValueError(f"不支持的Whisper模型: {self.model}")
+
+        valid_devices = ["auto", "cuda", "cpu"]
+        if self.device not in valid_devices:
+            raise ValueError(f"不支持的Whisper运行设备: {self.device}")
+
+        valid_compute_types = ["auto", "float16", "int8", "int8_float16", "float32"]
+        if self.compute_type not in valid_compute_types:
+            raise ValueError(f"不支持的Whisper计算精度: {self.compute_type}")
         
         # 验证超时时间
         if self.timeout < 0:
@@ -445,11 +455,48 @@ class SpeechRecognizer:
                     logger.warning(f"Audio extraction failed, falling back to original video: {audio_error}")
                     audio_source = video_path
 
-                # Use CPU explicitly on desktop builds. CTranslate2's auto device can
-                # pick CUDA on Windows and then fail when CUDA DLLs are not installed.
-                model = WhisperModel(
-                    config.model, device="cpu", compute_type="int8", download_root=models_dir,
+                preferred_device = config.device or os.getenv("AUTOCLIP_WHISPER_DEVICE", "auto")
+                preferred_compute = config.compute_type or os.getenv("AUTOCLIP_WHISPER_COMPUTE_TYPE", "auto")
+
+                if preferred_device == "auto":
+                    try:
+                        import ctranslate2
+
+                        preferred_device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+                    except Exception as cuda_check_error:
+                        logger.warning("CUDA availability check failed, using CPU: %s", cuda_check_error)
+                        preferred_device = "cpu"
+
+                if preferred_compute == "auto":
+                    preferred_compute = "float16" if preferred_device == "cuda" else "int8"
+
+                logger.info(
+                    "Whisper runtime device=%s compute_type=%s model=%s",
+                    preferred_device,
+                    preferred_compute,
+                    config.model,
                 )
+                try:
+                    model = WhisperModel(
+                        config.model,
+                        device=preferred_device,
+                        compute_type=preferred_compute,
+                        download_root=models_dir,
+                    )
+                except Exception as model_error:
+                    if preferred_device != "cpu":
+                        logger.warning(
+                            "Whisper CUDA initialization failed, falling back to CPU int8: %s",
+                            model_error,
+                        )
+                        model = WhisperModel(
+                            config.model,
+                            device="cpu",
+                            compute_type="int8",
+                            download_root=models_dir,
+                        )
+                    else:
+                        raise
                 seg_iter, info = model.transcribe(
                     str(audio_source),
                     language=language,
@@ -685,6 +732,8 @@ def generate_subtitle_for_video(
     method: str = "auto",
     language: str = "auto",
     model: str = "base",
+    device: str = "auto",
+    compute_type: str = "auto",
     enable_fallback: bool = True,
     progress_callback: Optional[Callable[[float, float, int], None]] = None,
 ) -> Path:
@@ -710,6 +759,8 @@ def generate_subtitle_for_video(
         method=SpeechRecognitionMethod(method) if method != "auto" else SpeechRecognitionMethod.WHISPER_LOCAL,
         language=LanguageCode(language),
         model=model,
+        device=device,
+        compute_type=compute_type,
         enable_fallback=enable_fallback
     )
     

@@ -75,12 +75,22 @@ class SimplePipelineAdapter:
                     speech_config = get_desktop_config().speech_recognition
                     whisper_model = speech_config.whisper_config.model_name or "base"
                     whisper_language = speech_config.whisper_config.language or "auto"
+                    whisper_device = getattr(speech_config.whisper_config, "device", "auto")
+                    whisper_compute_type = getattr(speech_config.whisper_config, "compute_type", "auto")
                 except Exception as config_error:
                     logger.warning(f"读取语音识别配置失败，使用默认Whisper配置: {config_error}")
                     whisper_model = "base"
                     whisper_language = "auto"
+                    whisper_device = "auto"
+                    whisper_compute_type = "auto"
 
-                logger.info(f"尝试使用Whisper本地模型生成字幕: model={whisper_model}, language={whisper_language}")
+                logger.info(
+                    "尝试使用Whisper本地模型生成字幕: model=%s, language=%s, device=%s, compute_type=%s",
+                    whisper_model,
+                    whisper_language,
+                    whisper_device,
+                    whisper_compute_type,
+                )
                 output_path = metadata_dir / f"{video_file_path.stem}.srt"
                 cached_path = copy_cached_subtitle(video_file_path, output_path)
                 if cached_path:
@@ -116,6 +126,8 @@ class SimplePipelineAdapter:
                     method="whisper_local",
                     model=whisper_model,
                     language=whisper_language,
+                    device=whisper_device,
+                    compute_type=whisper_compute_type,
                     progress_callback=subtitle_progress,
                 )
                 

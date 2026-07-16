@@ -30,6 +30,8 @@ class WhisperConfig:
     model_name: str = "base"
     language: str = "auto"
     custom_models_dir: str = ""
+    device: str = "auto"
+    compute_type: str = "auto"
     enable_timestamps: bool = True
     enable_punctuation: bool = True
     enable_speaker_diarization: bool = False

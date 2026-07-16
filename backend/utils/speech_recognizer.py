@@ -21,6 +21,22 @@ logger = logging.getLogger(__name__)
 _WHISPER_TRANSCRIPTION_THREAD_LOCK = threading.Lock()
 
 
+def _safe_progress_callback(
+    progress_callback: Optional[Callable],
+    current_seconds: float,
+    total_seconds: float,
+    segment_count: int,
+    phase: str = "",
+) -> None:
+    """Notify callers about Whisper progress without requiring every callback to accept phase."""
+    if not progress_callback:
+        return
+    try:
+        progress_callback(current_seconds, total_seconds, segment_count, phase)
+    except TypeError:
+        progress_callback(current_seconds, total_seconds, segment_count)
+
+
 @contextmanager
 def _whisper_transcription_lock(video_path: Path):
     """Serialize local Whisper jobs across threads and desktop backend processes."""
@@ -434,12 +450,15 @@ class SpeechRecognizer:
             raise SpeechRecognitionError(f"视频文件为空: {video_path}")
         if output_path.exists():
             logger.info(f"字幕文件已存在，跳过Whisper处理: {output_path}")
+            _safe_progress_callback(progress_callback, 0, 0, 0, "cached")
             return output_path
 
         try:
+            _safe_progress_callback(progress_callback, 0, 0, 0, "waiting")
             with _whisper_transcription_lock(video_path):
                 if output_path.exists():
                     logger.info(f"字幕文件已存在，等待期间已由其他任务生成，跳过Whisper处理: {output_path}")
+                    _safe_progress_callback(progress_callback, 0, 0, 0, "cached")
                     return output_path
 
                 whisper_runtime.ensure_on_path()  # 让 faster_whisper 可导入
@@ -449,6 +468,7 @@ class SpeechRecognizer:
                 models_dir = str(whisper_runtime.get_models_dir() / "hub")
                 logger.info(f"使用 faster-whisper 生成字幕: model={config.model} lang={language or 'auto'}")
                 try:
+                    _safe_progress_callback(progress_callback, 0, 0, 0, "extracting_audio")
                     audio_source = self._extract_audio_from_video(video_path, output_path.parent)
                     logger.info(f"Whisper will transcribe extracted audio: {audio_source}")
                 except Exception as audio_error:
@@ -476,6 +496,7 @@ class SpeechRecognizer:
                     preferred_compute,
                     config.model,
                 )
+                _safe_progress_callback(progress_callback, 0, 0, 0, "loading_model")
                 try:
                     model = WhisperModel(
                         config.model,
@@ -497,6 +518,7 @@ class SpeechRecognizer:
                         )
                     else:
                         raise
+                _safe_progress_callback(progress_callback, 0, 0, 0, "transcribing")
                 seg_iter, info = model.transcribe(
                     str(audio_source),
                     language=language,
@@ -507,8 +529,8 @@ class SpeechRecognizer:
                 segments = []
                 for index, segment in enumerate(seg_iter, start=1):
                     segments.append({"start": segment.start, "end": segment.end, "text": segment.text})
-                    if progress_callback and duration > 0:
-                        progress_callback(float(segment.end), duration, index)
+                    if duration > 0:
+                        _safe_progress_callback(progress_callback, float(segment.end), duration, index, "transcribing")
                     if index == 1 or index % 20 == 0:
                         logger.info(
                             "Whisper transcribed %s segments, latest end %.2fs",
@@ -518,9 +540,11 @@ class SpeechRecognizer:
                 if not segments:
                     raise SpeechRecognitionError("Whisper 未识别出任何语音内容")
 
+                _safe_progress_callback(progress_callback, duration, duration, len(segments), "writing_srt")
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 output_path.write_text(self._segments_to_srt(segments), encoding="utf-8")
                 logger.info(f"本地 faster-whisper 字幕生成成功: {output_path}")
+                _safe_progress_callback(progress_callback, duration, duration, len(segments), "done")
                 return output_path
 
         except SpeechRecognitionError:

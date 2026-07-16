@@ -111,7 +111,28 @@ def process_import_task(self, project_id: str, video_path: str, srt_file_path: O
                     
                     last_progress_emit = {"ts": 0.0, "percent": -1}
 
-                    def subtitle_progress(current_seconds: float, total_seconds: float, segment_count: int) -> None:
+                    def subtitle_progress(
+                        current_seconds: float,
+                        total_seconds: float,
+                        segment_count: int,
+                        phase: str = "",
+                    ) -> None:
+                        phase_messages = {
+                            "waiting": ("等待字幕识别队列，批量导入时会串行处理", 5),
+                            "cached": ("已复用历史字幕，跳过AI识别", 100),
+                            "extracting_audio": ("正在从视频中提取音频", 12),
+                            "loading_model": f"正在加载Whisper模型 {model}",
+                            "transcribing": "正在识别字幕",
+                            "writing_srt": ("正在写入字幕文件", 96),
+                            "done": ("AI字幕生成完成", 100),
+                        }
+                        phase_message = phase_messages.get(phase)
+                        if isinstance(phase_message, tuple):
+                            emit_progress(project_id, "SUBTITLE", phase_message[0], subpercent=phase_message[1])
+                            return
+                        if isinstance(phase_message, str) and total_seconds <= 0:
+                            emit_progress(project_id, "SUBTITLE", phase_message, subpercent=20)
+                            return
                         if total_seconds <= 0:
                             return
                         now = time.monotonic()

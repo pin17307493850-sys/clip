@@ -8,17 +8,17 @@ from sqlalchemy.orm import Session
 import shutil
 import logging
 from pathlib import Path
+from datetime import datetime
 
 from ..services.base import BaseService
 from ..repositories.project_repository import ProjectRepository
 from ..models.project import Project
-from ..models.task import Task
+from ..models.task import Task, TaskStatus
 from ..models.clip import Clip
 from ..models.collection import Collection, clip_collection
 from ..schemas.project import ProjectCreate, ProjectUpdate, ProjectResponse, ProjectListResponse, ProjectFilter
 from ..schemas.base import PaginationParams, PaginationResponse
 from ..schemas.project import ProjectType, ProjectStatus
-from ..schemas.task import TaskStatus
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +246,8 @@ class ProjectService(BaseService[Project, ProjectCreate, ProjectUpdate, ProjectR
                 self.db.begin()
             
             try:
+                self._stop_project_tasks(project_id)
+
                 clip_ids = [row[0] for row in self.db.query(Clip.id).filter(Clip.project_id == project_id).all()]
                 collection_ids = [row[0] for row in self.db.query(Collection.id).filter(Collection.project_id == project_id).all()]
                 if clip_ids or collection_ids:
@@ -297,6 +299,32 @@ class ProjectService(BaseService[Project, ProjectCreate, ProjectUpdate, ProjectR
         except Exception as e:
             logger.error(f"删除项目 {project_id} 时发生错误: {str(e)}")
             return False
+
+    def _stop_project_tasks(self, project_id: str) -> None:
+        """Best-effort stop for pending/running tasks before project deletion."""
+        active_tasks = self.db.query(Task).filter(
+            Task.project_id == project_id,
+            Task.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING])
+        ).all()
+        if not active_tasks:
+            return
+
+        celery_ids = [task.celery_task_id for task in active_tasks if task.celery_task_id]
+        if celery_ids:
+            try:
+                from ..core.celery_app import celery_app
+
+                for celery_task_id in celery_ids:
+                    celery_app.control.revoke(celery_task_id, terminate=True)
+                    logger.info("已请求停止Celery任务: %s", celery_task_id)
+            except Exception as revoke_error:
+                logger.warning("停止Celery任务失败，将继续删除项目: %s", revoke_error)
+
+        for task in active_tasks:
+            task.status = TaskStatus.CANCELLED
+            task.completed_at = datetime.utcnow()
+            task.error_message = "项目已被用户删除，任务已取消"
+        self.db.flush()
     
     def _delete_project_files(self, project_id: str):
         """

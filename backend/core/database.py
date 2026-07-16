@@ -4,7 +4,7 @@
 """
 
 import os
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import StaticPool
 from typing import Generator
@@ -27,17 +27,28 @@ if DATABASE_URL == "sqlite:///autoclip.db":
 
 # 创建数据库引擎
 if "sqlite" in DATABASE_URL:
-    # SQLite配置
-    engine = create_engine(
-        DATABASE_URL,
-        connect_args={
+    sqlite_options = {
+        "connect_args": {
             "check_same_thread": False,
-            "timeout": 30
+            "timeout": 30,
         },
-        poolclass=StaticPool,
-        pool_pre_ping=True,
-        echo=False  # 设置为True可以看到SQL语句
-    )
+        "pool_pre_ping": True,
+        "echo": False,
+    }
+    # StaticPool is only safe for an in-memory SQLite database. A desktop file
+    # database is used by API and worker threads concurrently, so each checked
+    # out session must have its own connection and transaction.
+    if ":memory:" in DATABASE_URL:
+        sqlite_options["poolclass"] = StaticPool
+    engine = create_engine(DATABASE_URL, **sqlite_options)
+
+    @event.listens_for(engine, "connect")
+    def _configure_sqlite_connection(dbapi_connection, _connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 else:
     # PostgreSQL配置
     engine = create_engine(

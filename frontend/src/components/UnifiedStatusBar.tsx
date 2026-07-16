@@ -29,41 +29,25 @@ export const UnifiedStatusBar: React.FC<UnifiedStatusBarProps> = ({
   restartLoading = false
 }) => {
   const { getProgress, startPolling, stopPolling } = useSimpleProgressStore()
-  const [isPolling, setIsPolling] = useState(false)
   const [currentDownloadProgress, setCurrentDownloadProgress] = useState(downloadProgress)
   
   const progress = getProgress(projectId)
 
   // 根据状态决定是否轮询
   useEffect(() => {
-    // 如果已有进度且已到达终态，则不启动轮询
-    if (progress && (isCompleted(progress.stage) || isFailed(progress.message))) {
-      if (isPolling) {
-        console.log(`进度已终态，停止轮询: ${projectId}`)
-        stopPolling()
-        setIsPolling(false)
-      }
-      return
-    }
-
-    if ((status === 'processing' || status === 'pending') && !isPolling) {
+    const shouldPoll = status === 'processing' || status === 'pending' || status === 'importing'
+    if (shouldPoll) {
       console.log(`开始轮询处理进度: ${projectId}`)
-      startPolling([projectId], 5000) // 5秒轮询一次，减少频繁请求
-      setIsPolling(true)
-    } else if (status !== 'processing' && status !== 'pending' && isPolling) {
-      console.log(`停止轮询处理进度: ${projectId}`)
-      stopPolling()
-      setIsPolling(false)
+      startPolling([projectId], 2000)
+    } else {
+      stopPolling(projectId)
     }
 
     return () => {
-      if (isPolling) {
-        console.log(`清理轮询: ${projectId}`)
-        stopPolling()
-        setIsPolling(false)
-      }
+      console.log(`清理轮询: ${projectId}`)
+      stopPolling(projectId)
     }
-  }, [status, projectId, isPolling, startPolling, stopPolling])
+  }, [status, projectId, startPolling, stopPolling])
 
   // 下载进度轮询
   useEffect(() => {
@@ -110,17 +94,14 @@ export const UnifiedStatusBar: React.FC<UnifiedStatusBarProps> = ({
     if (progress) {
       // 进度到达终态时，立刻停止轮询并同步状态
       if (isCompleted(progress.stage) || isFailed(progress.message)) {
-        if (isPolling) {
-          console.log(`进度达到终态，停止轮询: ${projectId}`)
-          stopPolling()
-          setIsPolling(false)
-        }
+        console.log(`进度达到终态，停止轮询: ${projectId}`)
+        stopPolling(projectId)
         if (onStatusChange) {
           onStatusChange(isCompleted(progress.stage) ? 'completed' : 'failed')
         }
       }
     }
-  }, [progress, onStatusChange])
+  }, [progress, projectId, onStatusChange, stopPolling])
 
   // ===== Calm Premium 状态展示（见 DESIGN.md）=====
   // 进行中：细进度线 + 标签 + 右侧 mono 百分比

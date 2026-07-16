@@ -27,7 +27,7 @@ interface SimpleProgressState {
   // 操作方法
   upsert: (progress: SimpleProgress) => void
   startPolling: (projectIds: string[], intervalMs?: number) => void
-  stopPolling: () => void
+  stopPolling: (projectId?: string) => void
   clearProgress: (projectId: string) => void
   clearAllProgress: () => void
   
@@ -38,6 +38,43 @@ interface SimpleProgressState {
 
 export const useSimpleProgressStore = create<SimpleProgressState>((set, get) => {
   let timer: number | null = null
+  const activeProjectIds = new Set<string>()
+  let requestInFlight = false
+
+  const stopTimerWhenIdle = () => {
+    if (activeProjectIds.size > 0) return
+    if (timer !== null) {
+      clearInterval(timer)
+      timer = null
+    }
+    set({ isPolling: false, pollingInterval: null })
+  }
+
+  const fetchSnapshots = async () => {
+    const projectIds = Array.from(activeProjectIds)
+    if (projectIds.length === 0 || requestInFlight) return
+
+    requestInFlight = true
+    try {
+      const queryString = projectIds.map(id => `project_ids=${encodeURIComponent(id)}`).join('&')
+      const response = await fetch(`/api/v1/simple-progress/snapshot?${queryString}`)
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+
+      const snapshots: SimpleProgress[] = await response.json()
+      snapshots.forEach(snapshot => get().upsert(snapshot))
+
+      snapshots.forEach(snapshot => {
+        if (isCompleted(snapshot.stage) || isFailed(snapshot.message)) {
+          activeProjectIds.delete(snapshot.project_id)
+        }
+      })
+      stopTimerWhenIdle()
+    } catch (error) {
+      console.error('轮询进度失败:', error)
+    } finally {
+      requestInFlight = false
+    }
+  }
 
   return {
     // 初始状态
@@ -57,88 +94,25 @@ export const useSimpleProgressStore = create<SimpleProgressState>((set, get) => 
 
     // 开始轮询
     startPolling: (projectIds: string[], intervalMs: number = 5000) => {
-      const { stopPolling, isPolling } = get()
-      
-      // 如果已经在轮询，先停止
-      if (isPolling) {
-        stopPolling()
-      }
-
       if (projectIds.length === 0) {
         console.warn('没有项目ID，跳过轮询')
         return
       }
 
-      console.log(`开始轮询进度: ${projectIds.join(', ')}`)
-
-      // 立即获取一次
-      const fetchSnapshots = async () => {
-        try {
-          const queryString = projectIds.map(id => `project_ids=${id}`).join('&')
-          const response = await fetch(`/api/v1/simple-progress/snapshot?${queryString}`)
-          
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-          }
-          
-          const snapshots: SimpleProgress[] = await response.json()
-          
-          // 更新状态
-          snapshots.forEach(snapshot => {
-            console.log(`更新进度: ${snapshot.project_id} - ${snapshot.stage} (${snapshot.percent}%)`)
-            get().upsert(snapshot)
-          })
-          
-          console.log(`轮询更新: ${snapshots.length} 个项目`)
-          
-          // 如果没有任何进度，或所有项目均已到达终态，则自动停止轮询
-          try {
-            const allTerminal = snapshots.length > 0 && snapshots.every(s => {
-              return isCompleted(s.stage) || isFailed(s.message)
-            })
-            // 只有当有进度且所有项目都已完成时才停止轮询
-            // 如果snapshots.length === 0，说明项目可能还在pending状态，不应该停止轮询
-            if (snapshots.length > 0 && allTerminal) {
-              console.log('所有项目已完成，自动停止轮询')
-              get().stopPolling()
-            } else if (snapshots.length === 0) {
-              console.log('项目可能还在pending状态，继续轮询等待')
-            }
-          } catch (e) {
-            // 保护性捕获，避免影响后续轮询逻辑
-            console.warn('检测终态时出现问题，但不影响继续运行:', e)
-          }
-          
-        } catch (error) {
-          console.error('轮询进度失败:', error)
-        }
-      }
-
-      // 立即执行一次
+      projectIds.forEach(id => activeProjectIds.add(id))
       fetchSnapshots()
 
-      // 设置定时器
-      timer = setInterval(fetchSnapshots, intervalMs)
-
-      set({
-        isPolling: true,
-        pollingInterval: intervalMs
-      })
+      if (timer === null) {
+        timer = window.setInterval(fetchSnapshots, intervalMs)
+        set({ isPolling: true, pollingInterval: intervalMs })
+      }
     },
 
     // 停止轮询
-    stopPolling: () => {
-      if (timer) {
-        clearInterval(timer)
-        timer = null
-      }
-      
-      set({
-        isPolling: false,
-        pollingInterval: null
-      })
-      
-      console.log('停止轮询进度')
+    stopPolling: (projectId?: string) => {
+      if (projectId) activeProjectIds.delete(projectId)
+      else activeProjectIds.clear()
+      stopTimerWhenIdle()
     },
 
     // 清除单个项目进度

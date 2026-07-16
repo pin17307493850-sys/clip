@@ -984,7 +984,6 @@ async def get_project_file(
 async def get_project_clip(
     project_id: str,
     clip_id: str,
-    project_service: ProjectService = Depends(get_project_service)
 ):
     """Get a specific clip video file for a project."""
     try:
@@ -1006,16 +1005,20 @@ async def get_project_clip(
         
         # 如果没找到，尝试查找所有mp4文件，然后通过数据库匹配
         if not video_files:
+            from ...core.database import SessionLocal
             from ...models.clip import Clip
-            clip = project_service.db.query(Clip).filter(Clip.id == clip_id).first()
-            if clip and clip.video_path:
-                video_file_path = Path(clip.video_path)
-                if video_file_path.exists():
-                    video_file = video_file_path
-                else:
-                    raise HTTPException(status_code=404, detail=f"Clip video file not found for clip_id: {clip_id}")
-            else:
+            # Do not attach a request-scoped database dependency to a video
+            # response. FastAPI keeps dependencies alive until FileResponse
+            # finishes, so many open previews can otherwise exhaust the pool.
+            with SessionLocal() as db:
+                clip = db.query(Clip).filter(Clip.id == clip_id).first()
+                video_path = str(clip.video_path) if clip and clip.video_path else None
+            if not video_path:
                 raise HTTPException(status_code=404, detail=f"Clip not found in database: {clip_id}")
+            video_file_path = Path(video_path)
+            if not video_file_path.exists():
+                raise HTTPException(status_code=404, detail=f"Clip video file not found for clip_id: {clip_id}")
+            video_file = video_file_path
         else:
             video_file = video_files[0]
         

@@ -14,6 +14,7 @@ declare module 'axios' {
     metadata?: {
       startTime: number
       retryCount?: number
+      skipRetry?: boolean
     }
   }
 }
@@ -33,6 +34,7 @@ const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504])
 const MAX_RETRIES = 2
 
 const shouldRetry = (error: any): boolean => {
+  if (error?.config?.metadata?.skipRetry) return false
   const method = error?.config?.method?.toLowerCase()
   if (!method || !RETRYABLE_METHODS.has(method)) return false
 
@@ -63,7 +65,7 @@ api.interceptors.request.use(
 
     config.baseURL = apiConfigManager.getBaseUrl()
     // 添加请求ID用于追踪
-    config.metadata = { startTime: Date.now() }
+    config.metadata = { ...config.metadata, startTime: Date.now() }
     return config
   },
   (error) => {
@@ -230,7 +232,12 @@ export const projectApi = {
 
   // 获取所有项目
   getProjects: async (): Promise<Project[]> => {
-    const response = await api.get('/projects/')
+    // A project list should never keep the whole home page spinning for the
+    // global five-minute media/upload timeout.
+    const response = await api.get('/projects/', {
+      timeout: 15000,
+      metadata: { startTime: Date.now(), skipRetry: true },
+    })
     // 处理分页响应结构，返回items数组
     return (response as any).items || response || []
   },

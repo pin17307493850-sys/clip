@@ -185,15 +185,19 @@ export const UnifiedStatusBar: React.FC<UnifiedStatusBarProps> = ({
     </div>
   )
 
-  if (status === 'importing') return <ProgressRow label="导入中" percent={downloadProgress} />
   if (status === 'downloading') return <ProgressRow label="下载中" percent={currentDownloadProgress} />
 
-  if (status === 'processing') {
-    if (!progress) return <ProgressRow label="初始化中" percent={0} />
+  // Local uploads remain pending while Whisper prepares subtitles. Once a
+  // progress snapshot exists, show the real pipeline stage instead of the
+  // placeholder "importing 5%" state.
+  if ((status === 'processing' || status === 'importing') && progress) {
     const { stage, percent, message } = progress
     if (isFailed(message)) return <StatusRow label="处理失败" dot="var(--ac-error)" color="var(--ac-error)" />
     return <ProgressRow label={getStageDisplayName(stage)} percent={percent} detail={message} />
   }
+
+  if (status === 'importing') return <ProgressRow label="导入中" percent={downloadProgress} />
+  if (status === 'processing') return <ProgressRow label="初始化中" percent={0} />
 
   if (status === 'completed') return <StatusRow label="已完成" dot="var(--ac-ok)" color="var(--ac-sub)" />
   if (status === 'failed') return <StatusRow label="处理失败" dot="var(--ac-error)" color="var(--ac-error)" />

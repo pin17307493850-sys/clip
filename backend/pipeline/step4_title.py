@@ -15,6 +15,7 @@ from ..core.shared_config import METADATA_DIR, PROMPT_FILES
 from ..utils.llm_client import LLMClient
 from ..utils.text_processor import TextProcessor
 from .clip_dedup import dedupe_clips_by_time, expand_long_clips_from_advice
+from .parallel_llm import get_llm_concurrency, run_parallel_ordered
 
 logger = logging.getLogger(__name__)
 
@@ -97,23 +98,25 @@ class TitleGenerator:
             clips_by_chunk[clip.get("chunk_index", 0)].append(clip)
 
         total_batches = sum((len(items) + 4) // 5 for items in clips_by_chunk.values())
-        completed_batches = 0
-        titled: List[Dict] = []
-
+        tasks = []
         for chunk_index, chunk_clips in clips_by_chunk.items():
             chunk_clips = sorted(chunk_clips, key=_clip_id_sort_key)
             for batch_index, start in enumerate(range(0, len(chunk_clips), 5), start=1):
                 batch = chunk_clips[start : start + 5]
-                completed_batches += 1
-                subpercent = 20 + int((completed_batches / max(total_batches, 1)) * 20)
-                self._emit(
-                    "HIGHLIGHT",
-                    f"正在生成切片标题 {completed_batches}/{total_batches} 批",
-                    subpercent,
-                )
-                titled_batch = self._generate_batch(chunk_index, batch_index, batch)
-                titled.extend(titled_batch)
-                self._save_partial(titled)
+                tasks.append((chunk_index, batch_index, batch))
+
+        logger.info("Step4 using bounded LLM concurrency=%s", get_llm_concurrency())
+        def on_completed(completed: int, total: int) -> None:
+            subpercent = 20 + int((completed / max(total, 1)) * 20)
+            self._emit("HIGHLIGHT", f"并行生成标题 {completed}/{total} 批", subpercent)
+
+        results = run_parallel_ordered(
+            tasks,
+            lambda task: self._generate_batch(*task),
+            on_completed,
+        )
+        titled = [clip for batch in results for clip in batch]
+        self._save_partial(titled)
 
         titled.sort(key=_clip_id_sort_key)
         logger.info("Finished title generation for %s clips", len(titled))

@@ -14,6 +14,7 @@ from ..utils.text_processor import TextProcessor
 from ..core.shared_config import PROMPT_FILES, METADATA_DIR
 from .clip_dedup import dedupe_clips_by_time
 from .product_clip_logic import enrich_product_logic_clips
+from .parallel_llm import get_llm_concurrency, run_parallel_ordered
 
 logger = logging.getLogger(__name__)
 
@@ -255,13 +256,16 @@ class TimelineExtractor:
     ) -> List[Dict]:
         batch_size = 1
         max_parse_retries = 2
-        chunk_items = []
         total_batches = (len(chunk_outlines) + batch_size - 1) // batch_size
-
+        tasks = []
         for batch_start in range(0, len(chunk_outlines), batch_size):
             batch_index = batch_start // batch_size
-            batch_number = batch_index + 1
             batch_outlines = chunk_outlines[batch_start:batch_start + batch_size]
+            tasks.append((batch_index, batch_outlines))
+
+        def process_batch(task) -> List[Dict]:
+            batch_index, batch_outlines = task
+            batch_number = batch_index + 1
             llm_cache_path = self.llm_raw_output_dir / f"chunk_{chunk_index}_batch_{batch_index}.txt"
             raw_response = ""
 
@@ -269,8 +273,6 @@ class TimelineExtractor:
                 f"  > Processing chunk {chunk_index} batch {batch_number}, "
                 f"{len(batch_outlines)} outlines"
             )
-            self._emit_timeline_progress(batch_number, total_batches, "正在定位时间线")
-
             if llm_cache_path.exists():
                 with open(llm_cache_path, 'r', encoding='utf-8') as f:
                     raw_response = f.read()
@@ -292,10 +294,8 @@ class TimelineExtractor:
                         batch_outlines,
                         srt_chunk_data,
                     )
-                    chunk_items.extend(parsed_items)
-                    self._save_partial_chunk(chunk_index, chunk_items)
-                self._emit_timeline_progress(batch_number, total_batches, "已读取时间线缓存")
-                continue
+                    return parsed_items
+                return []
 
             llm_input_outlines = [
                 {
@@ -355,21 +355,17 @@ class TimelineExtractor:
                             batch_outlines,
                             srt_chunk_data,
                         )
-                        chunk_items.extend(parsed_items)
-                        self._save_partial_chunk(chunk_index, chunk_items)
                         logger.info(
                             f"  > Chunk {chunk_index} batch {batch_number} parsed "
                             f"{len(parsed_items)} timeline items"
                         )
-                        self._emit_timeline_progress(batch_number, total_batches, "时间线定位完成")
-                        break
+                        return parsed_items
 
                     if retry_count < max_parse_retries:
                         logger.warning(
                             f"  > Chunk {chunk_index} batch {batch_number} parse failed, "
                             f"retrying ({retry_count + 1}/{max_parse_retries + 1})"
                         )
-                        self._emit_timeline_progress(batch_number, total_batches, "时间线格式重试")
                         input_data['additional_instruction'] = (
                             "\n\nIMPORTANT output requirements:\n"
                             "1. Start with [ and end with ]\n"
@@ -401,7 +397,25 @@ class TimelineExtractor:
                             f"batch_{batch_index}_parse_exception"
                         )
                     continue
+            return []
 
+        logger.info(
+            "Step2 chunk %s using bounded LLM concurrency=%s for %s batches",
+            chunk_index,
+            get_llm_concurrency(),
+            total_batches,
+        )
+
+        def on_completed(completed: int, total: int) -> None:
+            self._emit_timeline_progress(
+                completed,
+                total,
+                f"并行定位时间线（并发{min(get_llm_concurrency(), total)}）",
+            )
+
+        batch_results = run_parallel_ordered(tasks, process_batch, on_completed)
+        chunk_items = [item for batch in batch_results for item in batch]
+        self._save_partial_chunk(chunk_index, chunk_items)
         return chunk_items
 
     def _apply_product_completion_guard(

@@ -16,6 +16,7 @@ from ..core.shared_config import METADATA_DIR, MIN_SCORE_THRESHOLD, PROMPT_FILES
 from ..utils.llm_client import LLMClient
 from ..utils.text_processor import TextProcessor
 from .clip_dedup import dedupe_clips_by_time, expand_long_clips_from_advice
+from .parallel_llm import get_llm_concurrency, run_parallel_ordered
 
 logger = logging.getLogger(__name__)
 
@@ -159,24 +160,25 @@ class ClipScorer:
             timeline_by_chunk[item.get("chunk_index", 0)].append(item)
 
         total_batches = sum((len(items) + 2) // 3 for items in timeline_by_chunk.values())
-        completed_batches = 0
-        all_scored_clips: List[Dict] = []
-
+        tasks = []
         for chunk_index, chunk_items in timeline_by_chunk.items():
             chunk_items = sorted(chunk_items, key=lambda x: int(x.get("id", 0)))
             for batch_index, start in enumerate(range(0, len(chunk_items), 3), start=1):
                 batch = chunk_items[start : start + 3]
-                completed_batches += 1
-                subpercent = 60 + int((completed_batches / max(total_batches, 1)) * 30)
-                self._emit(
-                    "ANALYZE",
-                    f"正在给候选片段评分 {completed_batches}/{total_batches} 批",
-                    subpercent,
-                )
+                tasks.append((chunk_index, batch_index, batch))
 
-                scored_batch = self._score_batch(chunk_index, batch_index, batch)
-                all_scored_clips.extend(scored_batch)
-                self._save_partial(all_scored_clips)
+        logger.info("Step3 using bounded LLM concurrency=%s", get_llm_concurrency())
+        def on_completed(completed: int, total: int) -> None:
+            subpercent = 60 + int((completed / max(total, 1)) * 30)
+            self._emit("ANALYZE", f"并行评分 {completed}/{total} 批", subpercent)
+
+        results = run_parallel_ordered(
+            tasks,
+            lambda task: self._score_batch(*task),
+            on_completed,
+        )
+        all_scored_clips = [clip for batch in results for clip in batch]
+        self._save_partial(all_scored_clips)
 
         all_scored_clips.sort(key=lambda x: int(x.get("id", 0)))
         logger.info("Finished scoring %s clips", len(all_scored_clips))

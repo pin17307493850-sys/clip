@@ -11,6 +11,7 @@ from pathlib import Path
 from ..utils.llm_client import LLMClient
 from ..utils.text_processor import TextProcessor
 from ..core.shared_config import PROMPT_FILES, METADATA_DIR
+from .parallel_llm import get_llm_concurrency, run_parallel_ordered
 
 logger = logging.getLogger(__name__)
 
@@ -71,11 +72,10 @@ class OutlineExtractor:
         chunk_files = self._save_chunks_to_files(chunks)
         self._save_srt_chunks(chunks)
         
-        all_outlines = []
-        
-        # 4. 逐一处理每个文本块文件
-        for i, chunk_file in enumerate(chunk_files):
-            logger.info(f"处理第{i+1}/{len(chunks)}个文本块: {chunk_file.name}")
+        # 4. 独立文本块并行处理，结果仍按原块顺序合并
+        def process_chunk(task):
+            i, chunk_file = task
+            logger.info(f"并行处理第{i+1}/{len(chunks)}个文本块: {chunk_file.name}")
             try:
                 # 读取文本块内容
                 with open(chunk_file, 'r', encoding='utf-8') as f:
@@ -89,12 +89,16 @@ class OutlineExtractor:
                     # 解析响应并附加块索引
                     # 注意：这里的chunk_index直接用i，与文件名和原始chunk对应
                     parsed_outlines = self._parse_outline_response(response, i)
-                    all_outlines.extend(parsed_outlines)
+                    return parsed_outlines
                 else:
                     logger.warning(f"处理第{i+1}个文本块时返回空响应")
             except Exception as e:
                 logger.error(f"处理第{i+1}个文本块失败: {e}")
-                continue
+            return []
+
+        logger.info("Step1 using bounded LLM concurrency=%s", get_llm_concurrency())
+        chunk_results = run_parallel_ordered(enumerate(chunk_files), process_chunk)
+        all_outlines = [item for result in chunk_results for item in result]
         
         # 5. 合并和去重
         final_outlines = self._merge_outlines(all_outlines)

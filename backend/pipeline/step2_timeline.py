@@ -547,8 +547,15 @@ class TimelineExtractor:
             "香", "入口", "配料", "原料", "工艺", "包装", "设计", "材质",
         )
         hard_stop_words = (
-            "下一个", "另外", "第二个", "第三个", "首先第一个", "接下来",
-            "再看", "我们换", "上车吧", "小助理",
+            "下一个", "另外", "接下来", "再看", "我们换", "上车吧", "小助理",
+        )
+        suite_continuation_words = (
+            "还有", "最后一个", "最后一款", "第一款", "第二款", "第三款",
+            "第四款", "其中", "里面", "内含", "包含",
+        )
+        suite_section_stop_words = (
+            "块钱", "元钱", "原价", "现价", "直播价", "到手价",
+            "几号链接", "上链接", "赠送", "额外送",
         )
 
         def text_of(value: Any) -> str:
@@ -601,6 +608,7 @@ class TimelineExtractor:
             if start is None or end is None:
                 continue
             subtitles.append((start, end, str(sub.get("text") or "").strip()))
+        subtitles.sort(key=lambda entry: (entry[0], entry[1]))
 
         adjusted_items = []
         for item in parsed_items:
@@ -623,7 +631,7 @@ class TimelineExtractor:
             start_sec = seconds(item.get("start_time"))
             end_sec = seconds(item.get("end_time"))
             hint_end = seconds(outline.get("end_time"))
-            if start_sec is None or end_sec is None or hint_end is None or hint_end <= end_sec:
+            if start_sec is None or end_sec is None or hint_end is None:
                 adjusted_items.append(item)
                 continue
 
@@ -634,6 +642,33 @@ class TimelineExtractor:
             grace = 12 if is_suite else 6
             target_limit = min(hint_end + grace, start_sec + max_duration)
             target_end = end_sec
+
+            # A suite/gift box may introduce its child products one after
+            # another. Do not stop at the end hint when the subtitles explicitly
+            # say that another item in the same suite follows.
+            if is_suite:
+                continuation_limit = min(end_sec + 45, start_sec + max_duration)
+                saw_continuation = False
+                previous_end = end_sec
+                for sub_start, sub_end, sub_text in subtitles:
+                    if sub_end <= end_sec:
+                        continue
+                    if sub_start > continuation_limit or sub_start - previous_end > 5:
+                        break
+                    has_continuation = any(word in sub_text for word in suite_continuation_words)
+                    if any(word in sub_text for word in hard_stop_words) and not has_continuation:
+                        break
+                    if saw_continuation and any(word in sub_text for word in suite_section_stop_words):
+                        break
+                    if has_continuation:
+                        saw_continuation = True
+                    if saw_continuation:
+                        target_end = max(target_end, sub_end)
+                    previous_end = sub_end
+
+                if saw_continuation:
+                    target_limit = max(target_limit, target_end)
+
             for sub_start, sub_end, sub_text in subtitles:
                 if sub_start < end_sec or sub_start > hint_end + 45:
                     continue
@@ -649,7 +684,7 @@ class TimelineExtractor:
             content_lines = [
                 sub_text
                 for sub_start, sub_end, sub_text in subtitles
-                if sub_text and sub_end >= start_sec and sub_start <= target_end
+                if sub_text and sub_end >= start_sec and sub_start < target_end
             ]
             adjusted = dict(item)
             adjusted["end_time"] = srt_time(target_end)

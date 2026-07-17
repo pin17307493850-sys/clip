@@ -91,3 +91,54 @@ def test_timeline_parse_fallback_keeps_timed_outline_and_subtitles():
     assert fallback[0]["end_time"] == "00:21:15,000"
     assert fallback[0]["timeline_source"] == "outline_fallback"
     assert "购买建议" in fallback[0]["content"]
+
+
+def test_suite_completion_guard_keeps_following_child_product():
+    extractor = TimelineExtractor.__new__(TimelineExtractor)
+    extractor.text_processor = TextProcessor()
+    items = [
+        {
+            "product": "爱丽丝之梦礼盒",
+            "outline": "爱丽丝之梦礼盒四款茶介绍",
+            "start_time": "00:13:41,850",
+            "end_time": "00:14:27,070",
+        }
+    ]
+    outlines = [
+        {
+            "product": "爱丽丝之梦礼盒",
+            "title": "爱丽丝之梦礼盒四款茶介绍",
+            "start_time": "00:13:41,850",
+            "end_time": "00:14:27,070",
+        }
+    ]
+    # Keep these intentionally out of order: real chunk checkpoints can be
+    # assembled from parallel batches and must still produce a stable timeline.
+    subtitles = [
+        {
+            "start_time": "00:14:46,530",
+            "end_time": "00:14:54,810",
+            "text": "小圆罐一罐六十块钱，四罐是二百四。",
+        },
+        {
+            "start_time": "00:14:27,070",
+            "end_time": "00:14:36,270",
+            "text": "喝起来酸甜，像酸梅汤。",
+        },
+        {
+            "start_time": "00:14:37,210",
+            "end_time": "00:14:40,870",
+            "text": "然后最后一个是玫瑰花茶。",
+        },
+        {
+            "start_time": "00:14:40,870",
+            "end_time": "00:14:46,530",
+            "text": "对女生友好，可以加在茶里或者直接泡水。",
+        },
+    ]
+
+    adjusted = extractor._apply_product_completion_guard(items, outlines, subtitles)
+
+    assert adjusted[0]["end_time"] == "00:14:46,530"
+    assert "玫瑰花茶" in adjusted[0]["content"]
+    assert "六十块钱" not in adjusted[0]["content"]

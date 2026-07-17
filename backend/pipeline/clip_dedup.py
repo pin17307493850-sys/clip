@@ -5,6 +5,8 @@ import re
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple
 
+from .product_identity import product_family_name
+
 logger = logging.getLogger(__name__)
 
 
@@ -54,7 +56,7 @@ def _range_key(clip: Dict[str, Any]) -> Optional[Tuple[int, int]]:
     return round(start), round(end)
 
 
-def _quality_key(clip: Dict[str, Any]) -> Tuple[float, float, int, int, int]:
+def _quality_key(clip: Dict[str, Any]) -> Tuple[int, int, float, float, int, int, int]:
     score = float(clip.get("final_score", clip.get("score", 0)) or 0)
     clip_range = _clip_range(clip)
     duration = (clip_range[1] - clip_range[0]) if clip_range else 0
@@ -62,7 +64,17 @@ def _quality_key(clip: Dict[str, Any]) -> Tuple[float, float, int, int, int]:
     has_title = 1 if (clip.get("generated_title") or clip.get("title")) else 0
     duration_fit = -abs(duration - 45)
     product_specificity = len(_product_key(clip))
-    return score, duration_fit, product_specificity, text_len, has_title
+    boundary_audited = 1 if clip.get("product_boundary_audited") else 0
+    publishable_duration = 1 if duration >= 15.0 else 0
+    return (
+        boundary_audited,
+        publishable_duration,
+        score,
+        duration_fit,
+        product_specificity,
+        text_len,
+        has_title,
+    )
 
 
 def _compact_text(value: Any) -> str:
@@ -78,6 +90,16 @@ def _product_key(clip: Dict[str, Any]) -> str:
         for key in ("generated_title", "title", "outline")
     )
     return _compact_text(text)[:48]
+
+
+def _product_family_key(clip: Dict[str, Any]) -> str:
+    explicit = clip.get("product_family") or clip.get("parent_product")
+    if explicit:
+        return _compact_text(explicit)[:48]
+    product = clip.get("product") or clip.get("product_name")
+    if product:
+        return _compact_text(product_family_name(product))[:48]
+    return _product_key(clip)
 
 
 def _aspect_key(clip: Dict[str, Any]) -> str:
@@ -168,6 +190,28 @@ def _is_heavily_overlapped(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
     union_coverage = overlap / union
     same_start = abs(left_start - right_start) <= 3
     same_end = abs(left_end - right_end) <= 3
+    left_family = _product_family_key(left)
+    right_family = _product_family_key(right)
+    same_family = bool(left_family) and left_family == right_family
+    same_product = bool(left_product) and left_product == right_product
+
+    if (
+        same_product
+        and shorter_coverage >= 0.95
+        and (same_start or same_end or union_coverage >= 0.65)
+    ):
+        return True
+
+    # A very short child-product tail fully contained in a complete suite
+    # explanation is not independently publishable. Longer child sections
+    # remain separate because they can carry useful product-specific detail.
+    if (
+        same_family
+        and shorter_duration < 15.0
+        and longer_duration >= 30.0
+        and shorter_coverage >= 0.95
+    ):
+        return True
 
     if left_product and right_product and left_product != right_product:
         same_category = _category_key(left) and _category_key(left) == _category_key(right)

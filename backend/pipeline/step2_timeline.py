@@ -14,6 +14,7 @@ from ..utils.text_processor import TextProcessor
 from ..core.shared_config import PROMPT_FILES, METADATA_DIR
 from .clip_dedup import dedupe_clips_by_time, merge_cross_chunk_product_clips
 from .product_clip_logic import enrich_product_logic_clips
+from .product_timeline_audit import audit_product_timeline
 from .parallel_llm import get_llm_concurrency, run_parallel_ordered
 
 logger = logging.getLogger(__name__)
@@ -222,6 +223,11 @@ class TimelineExtractor:
         all_timeline_data = enrich_product_logic_clips(
             all_timeline_data,
             outlines,
+            self.srt_chunks_dir,
+            self.text_processor,
+        )
+        all_timeline_data = audit_product_timeline(
+            all_timeline_data,
             self.srt_chunks_dir,
             self.text_processor,
         )

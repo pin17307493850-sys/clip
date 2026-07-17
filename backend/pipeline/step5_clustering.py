@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 from ..core.shared_config import MAX_CLIPS_PER_COLLECTION, METADATA_DIR, PROMPT_FILES
 from ..utils.llm_client import LLMClient
 from .clip_dedup import dedupe_clips_by_time
+from .product_identity import canonical_product_name, parent_product_name
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ def _normalize_product_name(name: str) -> str:
         return ""
     if "狼木果茶" in cleaned and "朗姆" not in cleaned:
         return "狼木果茶（朗姆果茶）"
-    return cleaned[:28]
+    return canonical_product_name(cleaned)[:28]
 
 
 def _extract_product_name(clip: Dict[str, Any]) -> str:
@@ -80,25 +81,26 @@ def _extract_product_name(clip: Dict[str, Any]) -> str:
 
 
 def _clip_duration_seconds(clip: Dict[str, Any]) -> float:
-    def parse(value: Any) -> Optional[float]:
-        if value is None:
-            return None
-        text = str(value).replace(",", ".")
-        parts = text.split(":")
-        try:
-            if len(parts) == 3:
-                return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
-            if len(parts) == 2:
-                return int(parts[0]) * 60 + float(parts[1])
-            return float(parts[0])
-        except Exception:
-            return None
-
-    start = parse(clip.get("start_time"))
-    end = parse(clip.get("end_time"))
+    start = _clip_time_seconds(clip.get("start_time"))
+    end = _clip_time_seconds(clip.get("end_time"))
     if start is None or end is None:
         return 0.0
     return max(0.0, end - start)
+
+
+def _clip_time_seconds(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    text = str(value).replace(",", ".")
+    parts = text.split(":")
+    try:
+        if len(parts) == 3:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+        if len(parts) == 2:
+            return int(parts[0]) * 60 + float(parts[1])
+        return float(parts[0])
+    except Exception:
+        return None
 
 
 class ClusteringEngine:
@@ -128,15 +130,20 @@ class ClusteringEngine:
 
     def _create_product_collections(self, clips: List[Dict]) -> List[Dict]:
         grouped: "OrderedDict[str, List[Dict]]" = OrderedDict()
+        parent_links: "OrderedDict[str, List[Dict]]" = OrderedDict()
         product_like_count = 0
 
         for clip in clips:
+            raw_product = clip.get("product") or clip.get("product_name") or ""
             product = _extract_product_name(clip)
             if not product:
                 continue
             clip["product"] = product
             product_like_count += 1
             grouped.setdefault(product, []).append(clip)
+            parent = parent_product_name(raw_product)
+            if parent and parent != product:
+                parent_links.setdefault(parent, []).append(clip)
 
         if product_like_count < max(1, len(clips) // 5):
             return []
@@ -144,15 +151,35 @@ class ClusteringEngine:
         collections: List[Dict[str, Any]] = []
         collection_id = 1
         for product, product_clips in grouped.items():
+            collection_clips = list(product_clips)
+            for child_clip in parent_links.get(product, []):
+                if child_clip not in collection_clips:
+                    collection_clips.append(child_clip)
             ordered = sorted(
-                product_clips,
+                collection_clips,
                 key=lambda item: (
                     -float(item.get("final_score", 0) or 0),
                     -_clip_duration_seconds(item),
                     str(item.get("start_time", "")),
                 ),
             )
-            selected = ordered[: max(MAX_CLIPS_PER_COLLECTION, 1)]
+            selected = []
+            for candidate in ordered:
+                candidate_start = _clip_time_seconds(candidate.get("start_time"))
+                candidate_end = _clip_time_seconds(candidate.get("end_time"))
+                contained = any(
+                    candidate_start is not None
+                    and candidate_end is not None
+                    and _clip_time_seconds(existing.get("start_time")) is not None
+                    and _clip_time_seconds(existing.get("end_time")) is not None
+                    and candidate_start >= _clip_time_seconds(existing.get("start_time")) - 1
+                    and candidate_end <= _clip_time_seconds(existing.get("end_time")) + 1
+                    for existing in selected
+                )
+                if not contained:
+                    selected.append(candidate)
+                if len(selected) >= max(MAX_CLIPS_PER_COLLECTION, 1):
+                    break
             highlights = []
             for clip in selected[:3]:
                 point = clip.get("selling_point") or clip.get("title_angle") or clip.get("generated_title")
